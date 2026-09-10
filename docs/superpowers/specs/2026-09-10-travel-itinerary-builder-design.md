@@ -34,16 +34,20 @@ rather than inventing places from its own knowledge.
 
 ## Architecture
 
-Single Next.js 14 app (App Router, TypeScript, Tailwind CSS). Next.js API
-routes serve as the backend — no separate server process. All external API
-calls happen server-side (API routes), keeping the Anthropic key off the
-client.
+Two processes: a **Python (FastAPI) backend** that holds essentially all of
+the logic — calling the free APIs, scoring/clustering candidates, and
+prompting Claude — and a thin **React (Vite + TypeScript) frontend** that
+only renders the form, day cards, map, and editing/export UI. The frontend
+talks to the backend over a local REST API; there are no Next.js API
+routes and no server-side logic in the frontend. This keeps the actual
+"brains" of the app — data fetching, scoring, prompt construction, response
+validation — mainly in Python, per the project's language preference.
 
 ```
-Browser (React/Next.js pages)
-   │
+Browser (React frontend, Vite)
+   │  REST calls (fetch)
    ▼
-Next.js API routes
+FastAPI backend (Python)
    │
    ├─▶ Nominatim        (geocode destination → lat/lng)
    ├─▶ Overpass          (candidate places: food, culture, shopping, nature)
@@ -58,36 +62,36 @@ Next.js API routes
 1. **Input form** collects: destination, start/end date, budget (USD),
    traveler count, interests (multi-select), and preference sliders (pace,
    touristy vs. local, budget priority, walking tolerance).
-2. **Geocoding**: `POST /api/geocode` calls Nominatim with the destination
-   string, returns `{ lat, lng, displayName }`.
-3. **Candidate places**: `POST /api/places` calls Overpass with a bounding
+2. **Geocoding**: `POST /geocode` (FastAPI) calls Nominatim with the
+   destination string, returns `{ lat, lng, displayName }`.
+3. **Candidate places**: `POST /places` calls Overpass with a bounding
    box/radius around the geocoded point, querying OSM tags for restaurants,
    temples/shrines, museums, markets, shopping streets, and parks. Returns a
    deduplicated list of candidates with name, coordinates, OSM tags, and type.
-4. **Weather**: `GET /api/weather` calls Open-Meteo for the trip's date
+4. **Weather**: `GET /weather` calls Open-Meteo for the trip's date
    range at the geocoded coordinates. Returns a daily forecast (condition,
    temp, precipitation probability).
-5. **Travel-time matrix**: `POST /api/routes` calls OSRM's table service
+5. **Travel-time matrix**: `POST /routes` calls OSRM's table service
    for the candidate set (capped to a reasonable N to avoid huge matrices)
    to get pairwise travel times, used for clustering.
-6. **Scoring & clustering** (in-process, no external call): each candidate
-   gets a score per user interest weight, adjusted by weather fit (penalize
-   outdoor spots on rainy forecast days) and cost fit. Geographic clustering
-   groups nearby-scoring candidates into day-sized clusters using the OSRM
-   matrix, so each day's activities are geographically coherent.
-7. **Itinerary generation**: `POST /api/generate-itinerary` sends Claude a
+6. **Scoring & clustering** (in-process Python, no external call): each
+   candidate gets a score per user interest weight, adjusted by weather fit
+   (penalize outdoor spots on rainy forecast days) and cost fit. Geographic
+   clustering groups nearby-scoring candidates into day-sized clusters using
+   the OSRM matrix, so each day's activities are geographically coherent.
+7. **Itinerary generation**: `POST /generate-itinerary` sends Claude a
    prompt containing the user profile, budget breakdown target, the
    pre-scored/clustered candidate pool, and the weather forecast. Claude
    returns structured JSON (day themes, ordered activities with times/
-   durations/costs, meals, daily cost totals) validated against a Zod
-   schema; invalid/unparseable responses are retried once, then surfaced as
+   durations/costs, meals, daily cost totals) validated against a Pydantic
+   model; invalid/unparseable responses are retried once, then surfaced as
    an error.
 8. **Rendering**: day-by-day cards, a Leaflet map (OpenStreetMap tiles)
    showing each day's pins connected by the OSRM route, and a budget
    breakdown panel (category bars vs. total, remaining buffer).
 9. **AI editing**: a small set of preset follow-up actions (regenerate day,
    make cheaper, add more of an interest, less walking, more local, slow
-   down) plus free-text input. Each sends `POST /api/edit-itinerary` with
+   down) plus free-text input. Each sends `POST /edit-itinerary` with
    the current itinerary JSON + the instruction; Claude returns either a
    full itinerary or a single modified day, merged into client state.
 10. **Weather flag**: days whose forecast shows rain get a badge on
@@ -96,6 +100,8 @@ Next.js API routes
     activities on rainy days for indoor alternatives").
 11. **Export**: "Export PDF" (jsPDF, client-side, from the rendered
     itinerary data) and "Export JSON" (raw itinerary object as a download).
+    Export stays client-side/frontend since it only formats data the
+    frontend already has — no backend involvement needed.
 
 ## Components
 
@@ -118,9 +124,10 @@ benefit from centralized update logic shared across `ItineraryCard`,
 
 - Any single free API (Overpass, Open-Meteo, OSRM) failing does not fail
   the whole request: the itinerary-generation prompt proceeds with
-  whatever data succeeded, and the UI shows a small non-blocking warning
-  banner naming which data source was unavailable.
-- Claude responses that fail JSON-schema validation are retried once with
+  whatever data succeeded, and the backend returns a warnings list the UI
+  renders as a small non-blocking banner naming which data source was
+  unavailable.
+- Claude responses that fail Pydantic validation are retried once with
   an added "your last response was invalid JSON, return only valid JSON"
   instruction; a second failure surfaces a user-facing error with a retry
   button.
@@ -129,20 +136,30 @@ benefit from centralized update logic shared across `ItineraryCard`,
 
 ## Testing / verification
 
-- No automated test suite is planned for this pass (small, single-user
-  local app). Verification is manual: run the dev server, generate a real
-  itinerary for a concrete destination (e.g., Tokyo, 3 days, mixed
-  interests), and exercise the map, budget breakdown, at least one AI-edit
-  action, and both export paths in the browser.
-- Schema validation (Zod) on Claude's itinerary JSON acts as a correctness
-  guard at runtime.
+- The scoring/clustering module (pure Python logic, no I/O) gets a small
+  pytest unit test suite, since it's cheap to test and easy to get subtly
+  wrong. The rest of the backend (API-calling glue, Claude prompting) and
+  the whole frontend are verified manually rather than with an automated
+  suite, given this is a small single-user local app.
+- Manual verification: run both the backend (`uvicorn`) and frontend
+  (`npm run dev`) locally, generate a real itinerary for a concrete
+  destination (e.g., Tokyo, 3 days, mixed interests), and exercise the
+  map, budget breakdown, at least one AI-edit action, and both export
+  paths in the browser.
+- Pydantic validation on Claude's itinerary JSON acts as a correctness
+  guard at runtime, on top of the pytest coverage for scoring/clustering.
 
 ## Tech stack
 
-- Next.js 14, React, TypeScript, Tailwind CSS
+**Backend (Python)**
+- FastAPI + Uvicorn
+- httpx (calling Nominatim, Overpass, Open-Meteo, OSRM)
+- Pydantic (request/response models, Claude JSON validation)
+- Anthropic Python SDK (Claude)
+- pytest (unit tests for scoring/clustering)
+
+**Frontend (TypeScript, thin UI layer only)**
+- React + Vite + TypeScript, Tailwind CSS
 - Zustand (state)
 - Leaflet + react-leaflet (map)
 - jsPDF (PDF export)
-- Zod (schema validation for Claude's JSON output)
-- Anthropic SDK (Claude)
-- Free APIs: Nominatim, Overpass, Open-Meteo, OSRM
