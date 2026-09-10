@@ -9,17 +9,17 @@ A locally-run web app that takes a destination, trip dates, budget, traveler
 count, and interest/preference selections, and produces a personalized,
 budget-aware, geographically-clustered day-by-day itinerary. Real-world data
 (geocoding, points of interest, weather, travel times) is fetched from free
-APIs first; Claude reasons over that real data to build the itinerary,
+APIs first; an LLM (Groq-hosted Llama) reasons over that real data to build the itinerary,
 rather than inventing places from its own knowledge.
 
 ## Goals
 
 - Full feature set in one build pass (not a trimmed MVP): input form, real
-  data fetch, scoring/clustering, Claude itinerary generation, day-card UI,
+  data fetch, scoring/clustering, LLM itinerary generation, day-card UI,
   interactive map with routes, budget breakdown, AI-editing follow-ups,
   weather-aware flags, PDF/JSON export.
 - All external data APIs are free (no paid tiers, no API keys beyond
-  Anthropic's).
+  Groq's (free tier)).
 - Runs locally (`npm run dev`); no deployment step required for this pass.
 
 ## Non-goals
@@ -36,7 +36,7 @@ rather than inventing places from its own knowledge.
 
 Two processes: a **Python (FastAPI) backend** that holds essentially all of
 the logic — calling the free APIs, scoring/clustering candidates, and
-prompting Claude — and a thin **React (Vite + TypeScript) frontend** that
+prompting the LLM — and a thin **React (Vite + TypeScript) frontend** that
 only renders the form, day cards, map, and editing/export UI. The frontend
 talks to the backend over a local REST API; there are no Next.js API
 routes and no server-side logic in the frontend. This keeps the actual
@@ -54,7 +54,7 @@ FastAPI backend (Python)
    ├─▶ Open-Meteo        (forecast for trip dates)
    ├─▶ OSRM              (travel-time matrix between candidates)
    ├─▶ scoring module    (in-process: interest/weather/distance/cost scoring)
-   └─▶ Anthropic Claude  (itinerary generation + AI-editing follow-ups)
+   └─▶ Groq LLM          (itinerary generation + AI-editing follow-ups)
 ```
 
 ## Data flow
@@ -79,9 +79,9 @@ FastAPI backend (Python)
    (penalize outdoor spots on rainy forecast days) and cost fit. Geographic
    clustering groups nearby-scoring candidates into day-sized clusters using
    the OSRM matrix, so each day's activities are geographically coherent.
-7. **Itinerary generation**: `POST /generate-itinerary` sends Claude a
+7. **Itinerary generation**: `POST /generate-itinerary` sends the LLM a
    prompt containing the user profile, budget breakdown target, the
-   pre-scored/clustered candidate pool, and the weather forecast. Claude
+   pre-scored/clustered candidate pool, and the weather forecast. The LLM
    returns structured JSON (day themes, ordered activities with times/
    durations/costs, meals, daily cost totals) validated against a Pydantic
    model; invalid/unparseable responses are retried once, then surfaced as
@@ -92,7 +92,7 @@ FastAPI backend (Python)
 9. **AI editing**: a small set of preset follow-up actions (regenerate day,
    make cheaper, add more of an interest, less walking, more local, slow
    down) plus free-text input. Each sends `POST /edit-itinerary` with
-   the current itinerary JSON + the instruction; Claude returns either a
+   the current itinerary JSON + the instruction; The LLM returns either a
    full itinerary or a single modified day, merged into client state.
 10. **Weather flag**: days whose forecast shows rain get a badge on
     outdoor activities and a one-click "Adjust for weather" button that
@@ -127,7 +127,7 @@ benefit from centralized update logic shared across `ItineraryCard`,
   whatever data succeeded, and the backend returns a warnings list the UI
   renders as a small non-blocking banner naming which data source was
   unavailable.
-- Claude responses that fail Pydantic validation are retried once with
+- LLM responses that fail Pydantic validation are retried once with
   an added "your last response was invalid JSON, return only valid JSON"
   instruction; a second failure surfaces a user-facing error with a retry
   button.
@@ -138,7 +138,7 @@ benefit from centralized update logic shared across `ItineraryCard`,
 
 - The scoring/clustering module (pure Python logic, no I/O) gets a small
   pytest unit test suite, since it's cheap to test and easy to get subtly
-  wrong. The rest of the backend (API-calling glue, Claude prompting) and
+  wrong. The rest of the backend (API-calling glue, LLM prompting) and
   the whole frontend are verified manually rather than with an automated
   suite, given this is a small single-user local app.
 - Manual verification: run both the backend (`uvicorn`) and frontend
@@ -146,7 +146,7 @@ benefit from centralized update logic shared across `ItineraryCard`,
   destination (e.g., Tokyo, 3 days, mixed interests), and exercise the
   map, budget breakdown, at least one AI-edit action, and both export
   paths in the browser.
-- Pydantic validation on Claude's itinerary JSON acts as a correctness
+- Pydantic validation on the LLM's itinerary JSON acts as a correctness
   guard at runtime, on top of the pytest coverage for scoring/clustering.
 
 ## Tech stack
@@ -154,8 +154,8 @@ benefit from centralized update logic shared across `ItineraryCard`,
 **Backend (Python)**
 - FastAPI + Uvicorn
 - httpx (calling Nominatim, Overpass, Open-Meteo, OSRM)
-- Pydantic (request/response models, Claude JSON validation)
-- Anthropic Python SDK (Claude)
+- Pydantic (request/response models, LLM JSON validation)
+- Groq Python SDK (free tier; Llama 3.3 70B)
 - pytest (unit tests for scoring/clustering)
 
 **Frontend (TypeScript, thin UI layer only)**
