@@ -135,7 +135,8 @@ def _call_llm(prompt: str, retry_note: Optional[str] = None) -> dict:
         messages.append({"role": "user", "content": retry_note})
     response = client.chat.completions.create(
         model=settings.groq_model,
-        max_tokens=4096,
+        max_tokens=8192,
+        response_format={"type": "json_object"},
         messages=messages,
     )
     text = response.choices[0].message.content
@@ -195,6 +196,13 @@ CURRENT ITINERARY (JSON):
 USER INSTRUCTION: "{instruction}"
 {scope}
 
+RULES:
+- Keep "destination", "dates", "duration_days", and "total_budget" EXACTLY
+  as they are in the current itinerary — these reflect the user's original
+  trip and must never change from an edit instruction.
+- Only "estimated_spend", "budget_breakdown", and "itinerary" (and
+  "map_pins" to match) should change to reflect the requested edit.
+
 Respond with ONLY the complete updated itinerary as valid JSON, in the exact
 same shape as the input (same top-level fields: destination, dates,
 duration_days, total_budget, estimated_spend, budget_breakdown, itinerary,
@@ -208,4 +216,13 @@ map_pins, warnings). No markdown fences, no commentary.
             prompt,
             retry_note="Your last response was not valid JSON. Reply with ONLY the raw JSON object.",
         )
+
+    # Don't rely on the LLM to honor the "don't change these" instruction —
+    # enforce it directly so an edit can never silently alter the user's
+    # original trip parameters.
+    data["destination"] = current.destination
+    data["dates"] = current.dates
+    data["duration_days"] = current.duration_days
+    data["total_budget"] = current.total_budget
+
     return ItineraryResponse.model_validate(data)
