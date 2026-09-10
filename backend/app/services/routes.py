@@ -18,7 +18,11 @@ async def get_travel_time_matrix(coordinates: list[Coordinates]) -> list[list[fl
     coord_str = ";".join(f"{c.lng},{c.lat}" for c in coords)
 
     async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.get(f"{OSRM_URL}/{coord_str}", params={"annotations": "duration"})
+        response = await client.get(
+            f"{OSRM_URL}/{coord_str}",
+            params={"annotations": "duration"},
+            headers={"User-Agent": "travel-itinerary-builder/1.0"},
+        )
     response.raise_for_status()
     data = response.json()
     durations = data.get("durations")

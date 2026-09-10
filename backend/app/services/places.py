@@ -86,7 +86,11 @@ async def search_places(
     query = _build_query(lat, lng, radius_m, interests)
 
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(OVERPASS_URL, data={"data": query})
+        response = await client.post(
+            OVERPASS_URL,
+            data={"data": query},
+            headers={"User-Agent": "travel-itinerary-builder/1.0"},
+        )
     response.raise_for_status()
     elements = response.json().get("elements", [])
 
