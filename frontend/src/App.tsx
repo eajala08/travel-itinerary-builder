@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAppStore } from './lib/store';
 import { generateItinerary, editItinerary } from './lib/api';
 import { SIGNATURE_PICKS, VIBES } from './lib/constants';
+import { deleteTrip, getSavedTrips, saveTrip, type SavedTrip } from './lib/savedTrips';
 import type { Preferences, TripInput } from './types/itinerary';
 import Sidebar from './components/Sidebar';
 import BriefCard from './components/BriefCard';
@@ -10,6 +11,7 @@ import LocationRow from './components/LocationRow';
 import BudgetCard from './components/BudgetCard';
 import SignatureSection from './components/SignatureSection';
 import ItineraryPanel from './components/ItineraryPanel';
+import SavedTripsList from './components/SavedTripsList';
 
 const today = new Date();
 const in3Days = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
@@ -29,6 +31,9 @@ export default function App() {
   const [activeVibe, setActiveVibe] = useState<string | null>(null);
   const [selectedSignatures, setSelectedSignatures] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
+  const [view, setView] = useState<'builder' | 'saved'>('builder');
+  const [savedTrips, setSavedTrips] = useState<SavedTrip[]>(() => getSavedTrips());
+  const [justSaved, setJustSaved] = useState(false);
 
   const showToast = (message: string, isError = false) => {
     setToast({ message, error: isError });
@@ -135,9 +140,34 @@ export default function App() {
     }
   };
 
+  const handleSave = () => {
+    if (!itinerary) return;
+    saveTrip(itinerary);
+    setSavedTrips(getSavedTrips());
+    setJustSaved(true);
+    showToast('Trip saved');
+    setTimeout(() => setJustSaved(false), 2000);
+  };
+
+  const handleLoadSavedTrip = (trip: SavedTrip) => {
+    setItinerary(trip.itinerary);
+    setDestination(trip.itinerary.destination);
+    setStartDate(trip.itinerary.dates[0]);
+    setEndDate(trip.itinerary.dates[trip.itinerary.dates.length - 1]);
+    setBudget(trip.itinerary.total_budget);
+    setView('builder');
+    showToast('Trip loaded');
+    setTimeout(() => document.querySelector('.itinerary-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  };
+
+  const handleDeleteSavedTrip = (id: string) => {
+    deleteTrip(id);
+    setSavedTrips(getSavedTrips());
+  };
+
   return (
     <div className="app-shell">
-      <Sidebar />
+      <Sidebar view={view} onNavigate={setView} />
 
       <main className="content">
         <div className="topbar">
@@ -155,31 +185,44 @@ export default function App() {
           </p>
         </div>
 
-        <BriefCard
-          destination={destination}
-          onDestinationChange={setDestination}
-          startDate={startDate}
-          onStartDateChange={setStartDate}
-          endDate={endDate}
-          onEndDateChange={setEndDate}
-          travelers={travelers}
-          onTravelersChange={setTravelers}
-          notes={notes}
-          onNotesChange={setNotes}
-        />
+        {view === 'saved' ? (
+          <SavedTripsList trips={savedTrips} onLoad={handleLoadSavedTrip} onDelete={handleDeleteSavedTrip} />
+        ) : (
+          <>
+            <BriefCard
+              destination={destination}
+              onDestinationChange={setDestination}
+              startDate={startDate}
+              onStartDateChange={setStartDate}
+              endDate={endDate}
+              onEndDateChange={setEndDate}
+              travelers={travelers}
+              onTravelersChange={setTravelers}
+              notes={notes}
+              onNotesChange={setNotes}
+            />
 
-        <PreferencesGrid selected={selectedPrefs} onToggle={togglePref} onClear={() => setSelectedPrefs(new Set())} />
+            <PreferencesGrid
+              selected={selectedPrefs}
+              onToggle={togglePref}
+              onClear={() => setSelectedPrefs(new Set())}
+            />
 
-        <LocationRow activeVibe={activeVibe} onSelect={(key) => setActiveVibe((prev) => (prev === key ? null : key))} />
+            <LocationRow
+              activeVibe={activeVibe}
+              onSelect={(key) => setActiveVibe((prev) => (prev === key ? null : key))}
+            />
 
-        <BudgetCard budget={budget} onChange={setBudget} />
+            <BudgetCard budget={budget} onChange={setBudget} />
 
-        <SignatureSection selected={selectedSignatures} onToggle={toggleSignature} />
+            <SignatureSection selected={selectedSignatures} onToggle={toggleSignature} />
 
-        <button type="button" className="build-button" disabled={loading} onClick={handleBuild}>
-          {loading ? 'Building your trip…' : 'Build my trip'}
-          <span className="build-arrow">→</span>
-        </button>
+            <button type="button" className="build-button" disabled={loading} onClick={handleBuild}>
+              {loading ? 'Building your trip…' : 'Build my trip'}
+              <span className="build-arrow">→</span>
+            </button>
+          </>
+        )}
       </main>
 
       <ItineraryPanel
@@ -188,6 +231,8 @@ export default function App() {
         error={error}
         editingLoading={editingLoading}
         onEdit={handleEdit}
+        onSave={handleSave}
+        justSaved={justSaved}
       />
 
       <div id="toast" className={`toast${toast ? ' show' : ''}${toast?.error ? ' error' : ''}`}>

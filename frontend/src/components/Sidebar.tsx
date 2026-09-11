@@ -1,4 +1,9 @@
-export default function Sidebar() {
+interface Props {
+  view: 'builder' | 'saved';
+  onNavigate: (view: 'builder' | 'saved') => void;
+}
+
+export default function Sidebar({ view, onNavigate }: Props) {
   return (
     <aside className="sidebar">
       <a href="#" className="brand">
@@ -6,10 +11,18 @@ export default function Sidebar() {
         Tripwise
       </a>
       <nav>
-        <button type="button" className="nav-item active">
+        <button
+          type="button"
+          className={`nav-item${view === 'builder' ? ' active' : ''}`}
+          onClick={() => onNavigate('builder')}
+        >
           <span className="nav-icon">✦</span>Trip Builder
         </button>
-        <button type="button" className="nav-item">
+        <button
+          type="button"
+          className={`nav-item${view === 'saved' ? ' active' : ''}`}
+          onClick={() => onNavigate('saved')}
+        >
           <span className="nav-icon">✈</span>Saved Trips
         </button>
         <button type="button" className="nav-item">

@@ -59,9 +59,19 @@ interface Props {
   error: string | null;
   editingLoading: boolean;
   onEdit: (instruction: string, targetDay?: number) => void;
+  onSave: () => void;
+  justSaved: boolean;
 }
 
-export default function ItineraryPanel({ itinerary, loading, error, editingLoading, onEdit }: Props) {
+export default function ItineraryPanel({
+  itinerary,
+  loading,
+  error,
+  editingLoading,
+  onEdit,
+  onSave,
+  justSaved,
+}: Props) {
   const [activeDayIndex, setActiveDayIndex] = useState(0);
 
   useEffect(() => {
@@ -105,7 +115,12 @@ export default function ItineraryPanel({ itinerary, loading, error, editingLoadi
                 ${itinerary.estimated_spend} / ${itinerary.total_budget}
               </p>
             </div>
-            <ExportButton itinerary={itinerary} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button type="button" className="quick-prompt" onClick={onSave}>
+                {justSaved ? '✓ Saved' : '💾 Save trip'}
+              </button>
+              <ExportButton itinerary={itinerary} />
+            </div>
           </div>
 
           {itinerary.warnings.length > 0 && (
