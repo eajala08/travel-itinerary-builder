@@ -31,6 +31,10 @@ rather than inventing places from its own knowledge.
 - Flight/hotel booking or pricing — budget covers activities, food, local
   transport, and shopping only; this is stated explicitly in the UI.
 - Multi-city trips, group cost-splitting, collaborative editing.
+- True Google Calendar sync (OAuth2, one-click "add to my calendar",
+  ongoing updates when the itinerary changes) — out of scope for this pass.
+  A client-side `.ics` file export was added instead; see **Scalability
+  notes** below for why this isn't the long-term approach.
 
 ## Architecture
 
@@ -99,9 +103,13 @@ FastAPI backend (Python)
     calls the same edit endpoint with a canned instruction ("swap outdoor
     activities on rainy days for indoor alternatives").
 11. **Export**: "Export PDF" (jsPDF, client-side, from the rendered
-    itinerary data) and "Export JSON" (raw itinerary object as a download).
-    Export stays client-side/frontend since it only formats data the
-    frontend already has — no backend involvement needed.
+    itinerary data), "Export JSON" (raw itinerary object as a download), and
+    "Add to Calendar" (a client-generated `.ics` file — one VEVENT per
+    activity/meal — that the user imports into Google Calendar, Apple
+    Calendar, or Outlook). All three stay client-side/frontend since they
+    only format data the frontend already has — no backend involvement
+    needed. See **Scalability notes** for why calendar export is `.ics`
+    rather than a live Google Calendar integration.
 
 ## Components
 
@@ -121,7 +129,7 @@ left, live itinerary preview on the right) rather than a generic form:
 - `ItineraryPanel` — trip cover, day tabs, and a timeline of that day's
   activities/meals (morning/noon/night), plus (reused) `BudgetBreakdown`,
   `Map`, and `EditingBar` beneath it.
-- `ExportButton` — PDF and JSON export actions.
+- `ExportButton` — PDF, JSON, and calendar (`.ics`) export actions.
 
 State lives in a single Zustand store (`lib/store.ts`) holding the current
 itinerary, loading/error state — justified here (unlike the MVP-only
@@ -173,3 +181,30 @@ preferences/vibe/signatures) is local to `App`.
 - Zustand (state)
 - Leaflet + react-leaflet (map)
 - jsPDF (PDF export)
+- Hand-rolled `.ics` builder (`lib/ics.ts`, no library) for calendar export
+
+## Scalability notes
+
+A few choices in this pass are deliberately the *simple* option for a
+single-user local app, not what a scalable/multi-user product would do.
+Called out here so they're not mistaken for the intended long-term design:
+
+- **Calendar export is a client-side `.ics` file, not live Google Calendar
+  sync.** The user downloads a file and imports it themselves; there's no
+  OAuth, no ongoing connection, and no automatic update when the itinerary
+  changes (e.g. via an AI edit) — they'd need to re-export and re-import. A
+  real product would use Google Calendar API (OAuth2 consent, storing a
+  refresh token per user, creating/updating events via the API) so trips
+  stay in sync automatically. That requires a Google Cloud project, an
+  OAuth consent flow, and server-side token storage — all out of scope
+  while this app has no accounts or backend persistence at all.
+- **Calendar event times are "floating" (no timezone).** `lib/ics.ts` emits
+  bare local date-times with no `VTIMEZONE`/UTC offset, so the importing
+  calendar app displays them in whatever timezone it's already set to.
+  Fine for a same-timezone trip; wrong for a trip that crosses timezones.
+  A scalable version would resolve and embed the destination's actual IANA
+  timezone per event.
+- **Saved trips live in `localStorage`, per browser.** Covered in the
+  Non-goals above (no accounts/persistence), but worth repeating here: this
+  doesn't scale past "one person, one browser." A multi-user product needs
+  the accounts/persistence layer this spec explicitly excludes.

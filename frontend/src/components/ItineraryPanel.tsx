@@ -107,7 +107,7 @@ export default function ItineraryPanel({
 
       {itinerary && activeDay && (
         <>
-          <div className="trip-intro">
+          <div className="trip-intro" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
             <div>
               <h2>{itinerary.destination}</h2>
               <p className="trip-meta">
@@ -115,9 +115,9 @@ export default function ItineraryPanel({
                 ${itinerary.estimated_spend} / ${itinerary.total_budget}
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               <button type="button" className="quick-prompt" onClick={onSave}>
-                {justSaved ? '✓ Saved' : '💾 Save trip'}
+                {justSaved ? '✓ Saved' : '💾 Save'}
               </button>
               <ExportButton itinerary={itinerary} />
             </div>

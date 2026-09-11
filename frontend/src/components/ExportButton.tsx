@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import type { ItineraryResponse } from '../types/itinerary';
+import { buildICS } from '../lib/ics';
 
 export default function ExportButton({ itinerary }: { itinerary: ItineraryResponse }) {
   const handleExportPDF = () => {
@@ -52,19 +53,37 @@ export default function ExportButton({ itinerary }: { itinerary: ItineraryRespon
     URL.revokeObjectURL(url);
   };
 
+  const handleExportCalendar = () => {
+    const ics = buildICS(itinerary);
+    const blob = new Blob([ics], { type: 'text/calendar' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${itinerary.destination.replace(/[^a-z0-9]/gi, '-')}-itinerary.ics`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="flex gap-3">
+    <div className="flex flex-wrap gap-1.5">
       <button
         onClick={handleExportPDF}
-        className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition font-medium"
+        className="bg-red-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-red-700 transition font-medium text-xs whitespace-nowrap"
       >
-        ⬇ Export PDF
+        ⬇ PDF
       </button>
       <button
         onClick={handleExportJSON}
-        className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition font-medium"
+        className="bg-gray-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-gray-700 transition font-medium text-xs whitespace-nowrap"
       >
-        ⬇ Export JSON
+        ⬇ JSON
+      </button>
+      <button
+        onClick={handleExportCalendar}
+        className="bg-blue-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-blue-700 transition font-medium text-xs whitespace-nowrap"
+        title="Downloads a .ics file to import into Google Calendar, Apple Calendar, or Outlook"
+      >
+        📅 Calendar
       </button>
     </div>
   );
