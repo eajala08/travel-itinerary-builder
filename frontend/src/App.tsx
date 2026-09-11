@@ -1,96 +1,198 @@
+import { useState } from 'react';
 import { useAppStore } from './lib/store';
-import { editItinerary } from './lib/api';
-import InputForm from './components/InputForm';
-import ItineraryCard from './components/ItineraryCard';
-import BudgetBreakdown from './components/BudgetBreakdown';
-import Map from './components/Map';
-import EditingBar from './components/EditingBar';
-import ExportButton from './components/ExportButton';
+import { generateItinerary, editItinerary } from './lib/api';
+import { SIGNATURE_PICKS, VIBES } from './lib/constants';
+import type { Preferences, TripInput } from './types/itinerary';
+import Sidebar from './components/Sidebar';
+import BriefCard from './components/BriefCard';
+import PreferencesGrid from './components/PreferencesGrid';
+import LocationRow from './components/LocationRow';
+import BudgetCard from './components/BudgetCard';
+import SignatureSection from './components/SignatureSection';
+import ItineraryPanel from './components/ItineraryPanel';
 
-function App() {
-  const { itinerary, loading, error, editingLoading, setItinerary, setEditingLoading, setError, reset } =
+const today = new Date();
+const in3Days = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
+const toISODate = (d: Date) => d.toISOString().split('T')[0];
+
+export default function App() {
+  const { itinerary, loading, editingLoading, error, setItinerary, setLoading, setEditingLoading, setError } =
     useAppStore();
 
-  const handleEdit = async (instruction: string, targetDay: number | null = null) => {
+  const [destination, setDestination] = useState('');
+  const [startDate, setStartDate] = useState(toISODate(today));
+  const [endDate, setEndDate] = useState(toISODate(in3Days));
+  const [travelers, setTravelers] = useState(2);
+  const [notes, setNotes] = useState('');
+  const [budget, setBudget] = useState(1500);
+  const [selectedPrefs, setSelectedPrefs] = useState<Set<string>>(new Set());
+  const [activeVibe, setActiveVibe] = useState<string | null>(null);
+  const [selectedSignatures, setSelectedSignatures] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
+
+  const showToast = (message: string, isError = false) => {
+    setToast({ message, error: isError });
+    setTimeout(() => setToast(null), 2800);
+  };
+
+  const togglePref = (key: string) => {
+    setSelectedPrefs((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const toggleSignature = (key: string) => {
+    setSelectedSignatures((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        if (next.size >= 2) {
+          const [first] = next;
+          next.delete(first);
+        }
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const buildInterests = (): Record<string, number> => {
+    const interests: Record<string, number> = {};
+    selectedPrefs.forEach((key) => {
+      interests[key] = 8;
+    });
+    selectedSignatures.forEach((key) => {
+      const pick = SIGNATURE_PICKS.find((p) => p.key === key);
+      pick?.boosts.forEach((boostKey) => {
+        interests[boostKey] = Math.max(interests[boostKey] ?? 0, 9);
+      });
+    });
+    return interests;
+  };
+
+  const buildPreferences = (): Preferences => {
+    const vibe = VIBES.find((v) => v.key === activeVibe);
+    return {
+      pace: vibe?.pace ?? 'moderate',
+      tourist_level: vibe?.tourist_level ?? 'mixed',
+      walking: vibe?.walking ?? 'moderate',
+    };
+  };
+
+  const handleBuild = async () => {
+    if (!destination.trim()) {
+      showToast('Add a destination first', true);
+      return;
+    }
+    if (endDate < startDate) {
+      showToast('End date must be after the start date', true);
+      return;
+    }
+
+    const input: TripInput = {
+      destination: destination.trim(),
+      start_date: startDate,
+      end_date: endDate,
+      budget,
+      travelers,
+      interests: buildInterests(),
+      preferences: buildPreferences(),
+      notes,
+    };
+
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await generateItinerary(input);
+      setItinerary(result);
+      showToast('Your trip is ready ✨');
+      document.querySelector('.itinerary-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to generate itinerary.';
+      setError(message);
+      showToast(message, true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEdit = async (instruction: string, targetDay?: number) => {
     if (!itinerary) return;
     setEditingLoading(true);
     try {
-      const updated = await editItinerary(itinerary, instruction, targetDay);
+      const updated = await editItinerary(itinerary, instruction, targetDay ?? null);
       setItinerary(updated);
+      showToast('Trip updated');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update itinerary.');
+      const message = err instanceof Error ? err.message : 'Failed to update itinerary.';
+      setError(message);
+      showToast(message, true);
     } finally {
       setEditingLoading(false);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-        <div className="animate-spin h-10 w-10 border-4 border-blue-600 border-t-transparent rounded-full mb-4" />
-        <p className="text-lg text-gray-700">Building your itinerary…</p>
-        <p className="text-sm text-gray-500 mt-1">Fetching real places, weather, and routes first.</p>
-      </div>
-    );
-  }
-
-  if (!itinerary) {
-    return (
-      <div className="min-h-screen bg-gray-50 py-10 px-4">
-        <InputForm />
-        {error && <p className="max-w-2xl mx-auto text-center text-red-600 mt-4">{error}</p>}
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex justify-between items-start flex-wrap gap-4 mb-6">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800">{itinerary.destination}</h1>
-            <p className="text-gray-500">
-              {itinerary.dates[0]} to {itinerary.dates[itinerary.dates.length - 1]} · {itinerary.duration_days} days
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <ExportButton itinerary={itinerary} />
-            <button
-              onClick={reset}
-              className="text-gray-600 border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-100"
-            >
-              Start over
-            </button>
-          </div>
+    <div className="app-shell">
+      <Sidebar />
+
+      <main className="content">
+        <div className="topbar">
+          <span>TRAVEL PLANNER</span>
         </div>
 
-        {itinerary.warnings.length > 0 && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-6 text-sm text-yellow-800">
-            {itinerary.warnings.map((w, i) => (
-              <p key={i}>⚠️ {w}</p>
-            ))}
-          </div>
-        )}
+        <div className="hero-copy">
+          <p className="eyebrow">REAL DATA + AI</p>
+          <h1>
+            Plan trips that <em>actually</em> fit your life.
+          </h1>
+          <p>
+            We pull real places, weather, and routes, then build a budget-aware itinerary around what you're
+            actually into.
+          </p>
+        </div>
 
-        {error && <p className="text-red-600 mb-4">{error}</p>}
+        <BriefCard
+          destination={destination}
+          onDestinationChange={setDestination}
+          startDate={startDate}
+          onStartDateChange={setStartDate}
+          endDate={endDate}
+          onEndDateChange={setEndDate}
+          travelers={travelers}
+          onTravelersChange={setTravelers}
+          notes={notes}
+          onNotesChange={setNotes}
+        />
 
-        <BudgetBreakdown itinerary={itinerary} />
-        <Map pins={itinerary.map_pins} />
-        <EditingBar onEdit={(instruction) => handleEdit(instruction)} loading={editingLoading} />
+        <PreferencesGrid selected={selectedPrefs} onToggle={togglePref} onClear={() => setSelectedPrefs(new Set())} />
 
-        {itinerary.itinerary.map((day) => (
-          <ItineraryCard
-            key={day.day}
-            day={day}
-            editingLoading={editingLoading}
-            onAdjustForWeather={(dayNum) =>
-              handleEdit('Swap outdoor activities on this rainy day for indoor alternatives.', dayNum)
-            }
-          />
-        ))}
+        <LocationRow activeVibe={activeVibe} onSelect={(key) => setActiveVibe((prev) => (prev === key ? null : key))} />
+
+        <BudgetCard budget={budget} onChange={setBudget} />
+
+        <SignatureSection selected={selectedSignatures} onToggle={toggleSignature} />
+
+        <button type="button" className="build-button" disabled={loading} onClick={handleBuild}>
+          {loading ? 'Building your trip…' : 'Build my trip'}
+          <span className="build-arrow">→</span>
+        </button>
+      </main>
+
+      <ItineraryPanel
+        itinerary={itinerary}
+        loading={loading}
+        error={error}
+        editingLoading={editingLoading}
+        onEdit={handleEdit}
+      />
+
+      <div id="toast" className={`toast${toast ? ' show' : ''}${toast?.error ? ' error' : ''}`}>
+        {toast?.message}
       </div>
     </div>
   );
 }
-
-export default App;

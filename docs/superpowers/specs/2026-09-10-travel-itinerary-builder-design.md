@@ -105,20 +105,30 @@ FastAPI backend (Python)
 
 ## Components
 
-- `InputForm` — trip inputs, interest chips, preference sliders, validation.
-- `ItineraryCard` — one day: theme, activities, meals, daily budget summary,
-  weather badge, "adjust for weather" button when applicable.
-- `Map` — Leaflet map, pins per day (color-coded), OSRM route polylines.
-- `BudgetBreakdown` — total budget vs. estimated spend, per-category bars.
-- `EditingBar` — preset action buttons + free-text input, calls the edit
-  endpoint and patches the current itinerary in state.
+The UI follows a custom two-pane design (sidebar + trip-builder form on the
+left, live itinerary preview on the right) rather than a generic form:
+
+- `Sidebar` — static nav.
+- `BriefCard` — destination/dates/travelers inputs, free-text notes, quick
+  prompt suggestions.
+- `PreferencesGrid` — interest toggles (food, fashion, sports, culture,
+  history).
+- `LocationRow` — "vibe" presets that map to the preference sliders (pace,
+  tourist level, walking).
+- `BudgetCard` — budget slider bound to the trip budget.
+- `SignatureSection` — up to two "signature experience" picks that boost
+  specific interest weights.
+- `ItineraryPanel` — trip cover, day tabs, and a timeline of that day's
+  activities/meals (morning/noon/night), plus (reused) `BudgetBreakdown`,
+  `Map`, and `EditingBar` beneath it.
 - `ExportButton` — PDF and JSON export actions.
 
-State lives in a single Zustand store (`lib/store.ts`) holding the input,
-the current itinerary, loading/error state — justified here (unlike the
-MVP-only version) because AI-editing patches to nested day/activity state
-benefit from centralized update logic shared across `ItineraryCard`,
-`EditingBar`, and `ExportButton`.
+State lives in a single Zustand store (`lib/store.ts`) holding the current
+itinerary, loading/error state — justified here (unlike the MVP-only
+version) because AI-editing patches to nested day/activity state benefit
+from centralized update logic shared across `ItineraryPanel`, `EditingBar`,
+and `ExportButton`. Trip-input state (destination, dates, budget, selected
+preferences/vibe/signatures) is local to `App`.
 
 ## Error handling
 
@@ -155,7 +165,7 @@ benefit from centralized update logic shared across `ItineraryCard`,
 - FastAPI + Uvicorn
 - httpx (calling Nominatim, Overpass, Open-Meteo, OSRM)
 - Pydantic (request/response models, LLM JSON validation)
-- Groq Python SDK (free tier; Llama 3.3 70B)
+- Groq Python SDK (free tier; openai/gpt-oss-120b)
 - pytest (unit tests for scoring/clustering)
 
 **Frontend (TypeScript, thin UI layer only)**
