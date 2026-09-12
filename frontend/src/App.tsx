@@ -4,13 +4,13 @@ import { generateItinerary, editItinerary } from './lib/api';
 import { SIGNATURE_PICKS, VIBES } from './lib/constants';
 import { deleteTrip, getSavedTrips, saveTrip, type SavedTrip } from './lib/savedTrips';
 import type { Preferences, TripInput } from './types/itinerary';
-import Sidebar from './components/Sidebar';
+import Sidebar, { type View } from './components/Sidebar';
 import BriefCard from './components/BriefCard';
 import PreferencesGrid from './components/PreferencesGrid';
 import LocationRow from './components/LocationRow';
 import BudgetCard from './components/BudgetCard';
 import SignatureSection from './components/SignatureSection';
-import ItineraryPanel from './components/ItineraryPanel';
+import ItineraryTab from './components/ItineraryTab';
 import SavedTripsList from './components/SavedTripsList';
 
 const today = new Date();
@@ -31,7 +31,7 @@ export default function App() {
   const [activeVibe, setActiveVibe] = useState<string | null>(null);
   const [selectedSignatures, setSelectedSignatures] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null);
-  const [view, setView] = useState<'builder' | 'saved'>('builder');
+  const [view, setView] = useState<View>('builder');
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>(() => getSavedTrips());
   const [justSaved, setJustSaved] = useState(false);
 
@@ -114,11 +114,12 @@ export default function App() {
       const result = await generateItinerary(input);
       setItinerary(result);
       showToast('Your trip is ready ✨');
-      document.querySelector('.itinerary-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setView('itinerary');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate itinerary.';
       setError(message);
       showToast(message, true);
+      setView('itinerary');
     } finally {
       setLoading(false);
     }
@@ -155,9 +156,8 @@ export default function App() {
     setStartDate(trip.itinerary.dates[0]);
     setEndDate(trip.itinerary.dates[trip.itinerary.dates.length - 1]);
     setBudget(trip.itinerary.total_budget);
-    setView('builder');
+    setView('itinerary');
     showToast('Trip loaded');
-    setTimeout(() => document.querySelector('.itinerary-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   };
 
   const handleDeleteSavedTrip = (id: string) => {
@@ -167,73 +167,76 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Sidebar view={view} onNavigate={setView} />
+      <Sidebar view={view} onNavigate={setView} hasItinerary={!!itinerary} />
 
-      <main className="content">
-        <div className="topbar">
-          <span>TRAVEL PLANNER</span>
-        </div>
+      {view === 'itinerary' ? (
+        <ItineraryTab
+          itinerary={itinerary}
+          loading={loading}
+          error={error}
+          editingLoading={editingLoading}
+          onEdit={handleEdit}
+          onSave={handleSave}
+          justSaved={justSaved}
+          onBack={() => setView('builder')}
+        />
+      ) : (
+        <main className="content">
+          <div className="topbar">
+            <span>TRAVEL PLANNER</span>
+          </div>
 
-        <div className="hero-copy">
-          <p className="eyebrow">REAL DATA + AI</p>
-          <h1>
-            Plan trips that <em>actually</em> fit your life.
-          </h1>
-          <p>
-            We pull real places, weather, and routes, then build a budget-aware itinerary around what you're
-            actually into.
-          </p>
-        </div>
+          <div className="hero-copy">
+            <p className="eyebrow">REAL DATA + AI</p>
+            <h1>
+              Plan trips that <em>actually</em> fit your life.
+            </h1>
+            <p>
+              We pull real places, weather, and routes, then build a budget-aware itinerary around what you're
+              actually into.
+            </p>
+          </div>
 
-        {view === 'saved' ? (
-          <SavedTripsList trips={savedTrips} onLoad={handleLoadSavedTrip} onDelete={handleDeleteSavedTrip} />
-        ) : (
-          <>
-            <BriefCard
-              destination={destination}
-              onDestinationChange={setDestination}
-              startDate={startDate}
-              onStartDateChange={setStartDate}
-              endDate={endDate}
-              onEndDateChange={setEndDate}
-              travelers={travelers}
-              onTravelersChange={setTravelers}
-              notes={notes}
-              onNotesChange={setNotes}
-            />
+          {view === 'saved' ? (
+            <SavedTripsList trips={savedTrips} onLoad={handleLoadSavedTrip} onDelete={handleDeleteSavedTrip} />
+          ) : (
+            <>
+              <BriefCard
+                destination={destination}
+                onDestinationChange={setDestination}
+                startDate={startDate}
+                onStartDateChange={setStartDate}
+                endDate={endDate}
+                onEndDateChange={setEndDate}
+                travelers={travelers}
+                onTravelersChange={setTravelers}
+                notes={notes}
+                onNotesChange={setNotes}
+              />
 
-            <PreferencesGrid
-              selected={selectedPrefs}
-              onToggle={togglePref}
-              onClear={() => setSelectedPrefs(new Set())}
-            />
+              <PreferencesGrid
+                selected={selectedPrefs}
+                onToggle={togglePref}
+                onClear={() => setSelectedPrefs(new Set())}
+              />
 
-            <LocationRow
-              activeVibe={activeVibe}
-              onSelect={(key) => setActiveVibe((prev) => (prev === key ? null : key))}
-            />
+              <LocationRow
+                activeVibe={activeVibe}
+                onSelect={(key) => setActiveVibe((prev) => (prev === key ? null : key))}
+              />
 
-            <BudgetCard budget={budget} onChange={setBudget} />
+              <BudgetCard budget={budget} onChange={setBudget} />
 
-            <SignatureSection selected={selectedSignatures} onToggle={toggleSignature} />
+              <SignatureSection selected={selectedSignatures} onToggle={toggleSignature} />
 
-            <button type="button" className="build-button" disabled={loading} onClick={handleBuild}>
-              {loading ? 'Building your trip…' : 'Build my trip'}
-              <span className="build-arrow">→</span>
-            </button>
-          </>
-        )}
-      </main>
-
-      <ItineraryPanel
-        itinerary={itinerary}
-        loading={loading}
-        error={error}
-        editingLoading={editingLoading}
-        onEdit={handleEdit}
-        onSave={handleSave}
-        justSaved={justSaved}
-      />
+              <button type="button" className="build-button" disabled={loading} onClick={handleBuild}>
+                {loading ? 'Building your trip…' : 'Build my trip'}
+                <span className="build-arrow">→</span>
+              </button>
+            </>
+          )}
+        </main>
+      )}
 
       <div id="toast" className={`toast${toast ? ' show' : ''}${toast?.error ? ' error' : ''}`}>
         {toast?.message}

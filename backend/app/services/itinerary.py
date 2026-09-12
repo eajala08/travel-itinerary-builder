@@ -179,6 +179,13 @@ def generate_itinerary(
         ]
         data["map_pins"].extend(pins)
 
+    # Never trust the LLM to correctly echo back structured fields it was
+    # explicitly given — force them from the actual request, same as
+    # edit_itinerary already does for its own follow-up calls.
+    data["destination"] = destination
+    data["dates"] = dates
+    data["duration_days"] = len(dates)
+    data["total_budget"] = budget
     data["warnings"] = warnings
     return ItineraryResponse.model_validate(data)
 
