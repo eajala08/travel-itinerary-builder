@@ -122,3 +122,8 @@ def test_single_day_edit_cannot_change_other_days():
     assert [m.name for m in edited.itinerary[1].meals] == ["Ramen Yoroiya"]
     assert edited.budget_breakdown.shopping == 0
     assert edited.total_budget == 1500
+
+
+def test_shopping_allowance_is_capped():
+    result = _generate({"budget_breakdown": {"shopping": 1400}, "itinerary": [_llm_day(1)]})
+    assert result.budget_breakdown.shopping == 300

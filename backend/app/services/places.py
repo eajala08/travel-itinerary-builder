@@ -1,9 +1,20 @@
+import asyncio
+import logging
+import math
+from collections import defaultdict
+
 import httpx
 
 from app.models.schemas import Candidate
 from app.services import cache
 
+logger = logging.getLogger(__name__)
+
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Fallback when Overpass is down or saturated, which happens often on the
+# public instance. Same OpenStreetMap data, fewer tags (no cuisine).
+PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse"
+_HEADERS = {"User-Agent": "travel-itinerary-builder/1.0"}
 
 # Maps a user-facing interest key to Overpass tag filters and a candidate "type".
 CATEGORY_TAGS: dict[str, list[tuple[str, str, str]]] = {
@@ -54,30 +65,37 @@ def sight_categories(interests: list[str]) -> list[str]:
     return chosen or DEFAULT_SIGHT_CATEGORIES
 
 
-def _clauses(filters: list[tuple[str, str, str]], lat: float, lng: float, radius_m: int) -> str:
-    return "\n".join(
-        f'  node["{key}"="{value}"](around:{radius_m},{lat},{lng});' for key, value, _ in filters
-    )
+def _bbox(lat: float, lng: float, radius_m: int) -> str:
+    dlat = radius_m / 111_000
+    dlng = radius_m / (111_000 * max(math.cos(math.radians(lat)), 0.01))
+    return f"{lat - dlat:.5f},{lng - dlng:.5f},{lat + dlat:.5f},{lng + dlng:.5f}"
+
+
+def _set_clauses(filters: list[tuple[str, str, str]]) -> str:
+    """One regex clause per tag key: much cheaper for Overpass than one clause per value."""
+    by_key: dict[str, list[str]] = defaultdict(list)
+    for key, value, _ in filters:
+        by_key[key].append(value)
+    return "".join(f'node["{key}"~"^({"|".join(values)})$"][name];' for key, values in by_key.items())
+
+
+def _sight_filters(interests: list[str]) -> list[tuple[str, str, str]]:
+    filters: list[tuple[str, str, str]] = []
+    for category in sight_categories(interests):
+        filters.extend(CATEGORY_TAGS[category])
+    return filters
 
 
 def build_query(lat: float, lng: float, radius_m: int, interests: list[str]) -> str:
     """Restaurants and sights are fetched as separate sets so that in a dense
     city one can't crowd the other out of the result limit."""
-    sight_filters: list[tuple[str, str, str]] = []
-    for category in sight_categories(interests):
-        sight_filters.extend(CATEGORY_TAGS[category])
-
-    return f"""
-[out:json][timeout:25];
-(
-{_clauses(CATEGORY_TAGS["food"], lat, lng, radius_m)}
-)->.food;
-(
-{_clauses(sight_filters, lat, lng, radius_m)}
-)->.sights;
-.food out center {MAX_RESTAURANTS};
-.sights out center {MAX_SIGHTS};
-"""
+    return (
+        f"[out:json][timeout:10][bbox:{_bbox(lat, lng, radius_m)}];"
+        f"({_set_clauses(CATEGORY_TAGS['food'])})->.food;"
+        f"({_set_clauses(_sight_filters(interests))})->.sights;"
+        f".food out {MAX_RESTAURANTS};"
+        f".sights out {MAX_SIGHTS};"
+    )
 
 
 def _candidate_type_for_tags(tags: dict[str, str]) -> str:
@@ -88,8 +106,68 @@ def _candidate_type_for_tags(tags: dict[str, str]) -> str:
     return "other"
 
 
+def _candidate(osm_id, name, tags: dict, lat, lng, source: str) -> Candidate:
+    return Candidate(
+        id=str(osm_id), name=name, type=_candidate_type_for_tags(tags), lat=lat, lng=lng, tags=tags, source=source
+    )
+
+
+async def _from_overpass(lat: float, lng: float, radius_m: int, interests: list[str]) -> list[Candidate]:
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.post(
+            OVERPASS_URL, data={"data": build_query(lat, lng, radius_m, interests)}, headers=_HEADERS
+        )
+    response.raise_for_status()
+    return [
+        _candidate(e["id"], e["tags"]["name"], e["tags"], e["lat"], e["lon"], "overpass")
+        for e in response.json().get("elements", [])
+        if e.get("tags", {}).get("name") and "lat" in e
+    ]
+
+
+async def _from_photon(lat: float, lng: float, radius_m: int, interests: list[str]) -> list[Candidate]:
+    filters = CATEGORY_TAGS["food"] + _sight_filters(interests)
+
+    async with httpx.AsyncClient(timeout=10) as client:
+
+        async def one(key: str, value: str) -> list[Candidate]:
+            response = await client.get(
+                PHOTON_REVERSE_URL,
+                params={"lat": lat, "lon": lng, "osm_tag": f"{key}:{value}", "limit": 20, "radius": radius_m / 1000},
+                headers=_HEADERS,
+            )
+            response.raise_for_status()
+            found = []
+            for feature in response.json().get("features", []):
+                props = feature.get("properties", {})
+                if not props.get("name"):
+                    continue
+                f_lng, f_lat = feature["geometry"]["coordinates"]
+                found.append(_candidate(props.get("osm_id"), props["name"], {key: value}, f_lat, f_lng, "photon"))
+            return found
+
+        results = await asyncio.gather(*(one(k, v) for k, v, _ in filters), return_exceptions=True)
+
+    candidates = [c for r in results if not isinstance(r, BaseException) for c in r]
+    if not candidates and any(isinstance(r, BaseException) for r in results):
+        raise next(r for r in results if isinstance(r, BaseException))
+    return candidates
+
+
+def _dedupe_and_cap(candidates: list[Candidate]) -> list[Candidate]:
+    seen: set[str] = set()
+    restaurants: list[Candidate] = []
+    sights: list[Candidate] = []
+    for c in candidates:
+        if c.name in seen:
+            continue
+        seen.add(c.name)
+        (restaurants if c.type == "restaurant" else sights).append(c)
+    return restaurants[:MAX_RESTAURANTS] + sights[:MAX_SIGHTS]
+
+
 async def search_places(
-    lat: float, lng: float, interests: list[str], radius_m: int = 5000
+    lat: float, lng: float, interests: list[str], radius_m: int = 3000
 ) -> list[Candidate]:
     """Real restaurants plus real sights near a point. Restaurants have type "restaurant"."""
     cache_key = f"places:{lat:.3f},{lng:.3f}:{radius_m}:{','.join(sorted(sight_categories(interests)))}"
@@ -98,37 +176,13 @@ async def search_places(
         # Copies, because ranking and clustering mutate candidates.
         return [c.model_copy() for c in cached]
 
-    query = build_query(lat, lng, radius_m, interests)
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            OVERPASS_URL,
-            data={"data": query},
-            headers={"User-Agent": "travel-itinerary-builder/1.0"},
-        )
-    response.raise_for_status()
-    elements = response.json().get("elements", [])
+    try:
+        candidates = await _from_overpass(lat, lng, radius_m, interests)
+    except Exception as exc:  # noqa: BLE001 - fall through to the second source
+        logger.warning("Overpass unavailable (%s); falling back to Photon", exc)
+        candidates = await _from_photon(lat, lng, radius_m, interests)
 
-    seen_names: set[str] = set()
-    candidates: list[Candidate] = []
-    for element in elements:
-        tags = element.get("tags", {})
-        name = tags.get("name")
-        lat_value = element.get("lat") or element.get("center", {}).get("lat")
-        lng_value = element.get("lon") or element.get("center", {}).get("lon")
-        if not name or name in seen_names or lat_value is None or lng_value is None:
-            continue
-        seen_names.add(name)
-        candidates.append(
-            Candidate(
-                id=str(element["id"]),
-                name=name,
-                type=_candidate_type_for_tags(tags),
-                lat=lat_value,
-                lng=lng_value,
-                tags=tags,
-                source="overpass",
-            )
-        )
-
-    cache.put(cache_key, candidates, ttl_seconds=3600)
+    candidates = _dedupe_and_cap(candidates)
+    if candidates:
+        cache.put(cache_key, candidates, ttl_seconds=3600)
     return [c.model_copy() for c in candidates]

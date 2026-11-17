@@ -10,6 +10,8 @@ from app.services.scoring import is_outdoor
 
 _client: Optional[Groq] = None
 
+MAX_SHOPPING_SHARE = 0.2
+
 _ACTIVITIES_PER_DAY = {"relaxed": "2-3", "moderate": "3-4", "packed": "4"}
 
 
@@ -85,7 +87,9 @@ _RESPONSE_SHAPE = """{
 _GROUNDING_RULES = """- Every activity must be one of the real places listed, written with its EXACT name as given.
 - Every meal must be one of the real restaurants listed, written with its EXACT name as given.
 - If nothing suitable is listed, use a generic label such as "Lunch near <sight name>". Never invent the name of a specific business or attraction.
-- Costs are in US dollars, for the whole group."""
+- Costs are in US dollars, for the whole group.
+- Do not try to spend the whole budget; whatever is left over is the traveler's buffer.
+- "shopping" is an optional allowance: 0 unless the traveler is into shopping or fashion, and never more than a fifth of the budget."""
 
 
 def _build_generation_prompt(
@@ -241,7 +245,8 @@ def _finalize(
     food_total = sum(d["daily_spend"]["food"] for d in days_out)
     activities_total = sum(d["daily_spend"]["activities"] for d in days_out)
     transport_total = sum(d["daily_spend"]["transport"] for d in days_out)
-    shopping = _num((data.get("budget_breakdown") or {}).get("shopping"))
+    # Capped because models tend to park unspent budget in shopping.
+    shopping = min(_num((data.get("budget_breakdown") or {}).get("shopping")), total_budget * MAX_SHOPPING_SHARE)
     estimated = food_total + activities_total + transport_total + shopping
 
     return ItineraryResponse.model_validate(
