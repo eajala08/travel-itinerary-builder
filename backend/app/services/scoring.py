@@ -47,6 +47,10 @@ def cluster_into_days(
     matrix to fall back to a round-robin assignment with no geo-awareness.
     """
     clusters: dict[int, list[int]] = {day: [] for day in range(1, num_days + 1)}
+    if matrix and len(matrix) < len(candidates):
+        # A matrix that doesn't cover every candidate can't be indexed safely;
+        # fall back to the non-geo assignment instead of raising IndexError.
+        matrix = []
     if not candidates:
         return {day: [] for day in range(1, num_days + 1)}
 

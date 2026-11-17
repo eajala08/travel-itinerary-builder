@@ -162,3 +162,18 @@ body {
   .it-tl-card { grid-template-columns: 1fr; }
   .it-tl-time { padding-top: 0; }
 }
+
+.pref-nature{background:#dcefe0;color:#2f7a45}.pref-shopping{background:#f6e3ea;color:#a04a6b}.pref-nightlife{background:#e1e3f2;color:#4a4f8c}
+
+.map-stop{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;color:#fff;font:700 12px/1 system-ui,sans-serif;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.it-day-spend{font-size:var(--it-step--1);color:var(--it-muted);margin:0 0 16px}
+.it-directions{display:inline-block;margin-left:10px;font-size:var(--it-step--2);font-weight:600;color:var(--it-accent);text-decoration:none}
+.it-directions:hover{text-decoration:underline}
+.it-over{color:var(--it-bad)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Grid children default to min-width:auto, so wide content (map, day tabs)
+   pushed the itinerary past the viewport on phones. */
+.app-shell>*{min-width:0}
+.it-day-tabs{overflow-x:auto;max-width:100%}
+.leaflet-container{max-width:100%}

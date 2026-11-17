@@ -1,6 +1,9 @@
+from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+MAX_TRIP_DAYS = 14
 
 
 class Coordinates(BaseModel):
@@ -21,14 +24,41 @@ class Preferences(BaseModel):
 
 
 class TripInput(BaseModel):
-    destination: str
+    destination: str = Field(max_length=200)
     start_date: str
     end_date: str
-    budget: float
-    travelers: int = 1
+    budget: float = Field(gt=0)
+    travelers: int = Field(default=1, ge=1, le=50)
     interests: dict[str, int] = Field(default_factory=dict)  # e.g. {"food": 10, "culture": 8}
     preferences: Preferences = Field(default_factory=Preferences)
-    notes: str = ""
+    notes: str = Field(default="", max_length=2000)
+
+    @field_validator("destination")
+    @classmethod
+    def _destination_not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Destination is required")
+        return value
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _iso_date(cls, value: str) -> str:
+        date.fromisoformat(value)
+        return value
+
+    @model_validator(mode="after")
+    def _date_range(self) -> "TripInput":
+        days = (date.fromisoformat(self.end_date) - date.fromisoformat(self.start_date)).days + 1
+        if days < 1:
+            raise ValueError("End date must be on or after the start date")
+        if days > MAX_TRIP_DAYS:
+            raise ValueError(f"Trips are limited to {MAX_TRIP_DAYS} days")
+        return self
+
+    @property
+    def num_days(self) -> int:
+        return (date.fromisoformat(self.end_date) - date.fromisoformat(self.start_date)).days + 1
 
 
 class Candidate(BaseModel):
@@ -115,5 +145,5 @@ class ItineraryResponse(BaseModel):
 
 class EditRequest(BaseModel):
     itinerary: ItineraryResponse
-    instruction: str
+    instruction: str = Field(min_length=1, max_length=1000)
     target_day: Optional[int] = None

@@ -1,43 +1,52 @@
-import jsPDF from 'jspdf';
 import type { ItineraryResponse } from '../types/itinerary';
 import { buildICS } from '../lib/ics';
+import { money } from '../lib/format';
+import { buildTimeline } from '../lib/timeline';
 
 export default function ExportButton({ itinerary }: { itinerary: ItineraryResponse }) {
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
+    // Loaded on demand: jsPDF (+ html2canvas) is most of the bundle otherwise.
+    const { default: jsPDF } = await import('jspdf');
     const doc = new jsPDF();
+    const pageBottom = 280;
     let y = 20;
 
-    doc.setFontSize(20);
-    doc.text(itinerary.destination, 20, y);
-    y += 8;
+    // Writes wrapped text and starts a new page instead of running off the bottom.
+    const write = (text: string, x: number, size: number, color = 0, gap = 1.5) => {
+      doc.setFontSize(size);
+      doc.setTextColor(color);
+      const lines: string[] = doc.splitTextToSize(text, 190 - x);
+      const lineHeight = size * 0.45;
+      lines.forEach((line) => {
+        if (y > pageBottom) {
+          doc.addPage();
+          y = 20;
+        }
+        doc.text(line, x, y);
+        y += lineHeight;
+      });
+      y += gap;
+    };
 
-    doc.setFontSize(11);
-    doc.setTextColor(100);
-    doc.text(`${itinerary.dates[0]} to ${itinerary.dates[itinerary.dates.length - 1]}`, 20, y);
-    y += 6;
-    doc.text(`Budget: $${itinerary.estimated_spend} / $${itinerary.total_budget}`, 20, y);
-    y += 10;
+    write(itinerary.destination, 20, 20, 0, 3);
+    write(`${itinerary.dates[0]} to ${itinerary.dates[itinerary.dates.length - 1]}`, 20, 11, 100);
+    write(`Estimated spend: ${money(itinerary.estimated_spend)} of ${money(itinerary.total_budget)}`, 20, 11, 100, 6);
 
     itinerary.itinerary.forEach((day) => {
-      if (y > 260) {
+      if (y > pageBottom - 20) {
         doc.addPage();
         y = 20;
       }
-      doc.setFontSize(14);
-      doc.setTextColor(0);
-      doc.text(`Day ${day.day} — ${day.theme}`, 20, y);
-      y += 7;
-
-      doc.setFontSize(10);
-      day.activities.forEach((a) => {
-        doc.text(`• ${a.time} ${a.name} ($${a.estimated_cost})`, 25, y);
-        y += 5;
+      write(`Day ${day.day} (${day.date}): ${day.theme}`, 20, 14, 0, 1);
+      if (day.weather) {
+        write(`${day.weather.condition}, ${day.weather.temp_c}°C. ${day.weather.advice}`, 25, 9, 110);
+      }
+      buildTimeline(day).forEach((entry) => {
+        write(`${entry.time}  ${entry.title} (${entry.tag})`, 25, 10, 0, 0.5);
+        if (entry.detail) write(entry.detail, 30, 9, 110, 1);
       });
-      day.meals.forEach((m) => {
-        doc.text(`• ${m.time} ${m.type}: ${m.name} ($${m.budget})`, 25, y);
-        y += 5;
-      });
-      y += 5;
+      if (day.travel_tips) write(`Tip: ${day.travel_tips}`, 25, 9, 90);
+      write(`Day total: ${money(day.daily_spend.total)}`, 25, 9, 90, 6);
     });
 
     doc.save(`${itinerary.destination.replace(/[^a-z0-9]/gi, '-')}-itinerary.pdf`);

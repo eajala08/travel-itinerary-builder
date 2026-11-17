@@ -24,6 +24,13 @@ export const ACTIVITY_EMOJI: Record<string, string> = {
 
 export const DAY_COLORS = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2'];
 
+export const DAY_EDIT_PRESETS: { label: string; instruction: string }[] = [
+  { label: '🔄 Regenerate this day', instruction: 'Rebuild this day with a different mix of places from the same area.' },
+  { label: '🌧️ Indoor day', instruction: 'Make this day mostly indoor activities.' },
+  { label: '💰 Cheaper day', instruction: 'Make this day cheaper while keeping one highlight.' },
+  { label: '😴 Lighter day', instruction: 'Make this day lighter with fewer stops and more downtime.' },
+];
+
 export const EDIT_PRESETS: { label: string; instruction: string }[] = [
   { label: '💰 Make it cheaper', instruction: 'Make this itinerary cheaper overall while keeping the highlights.' },
   { label: '🍜 Add more food', instruction: 'Add more food and dining experiences throughout the trip.' },
@@ -38,7 +45,12 @@ export const PREF_ITEMS: { key: string; icon: string; iconClass: string; label: 
   { key: 'sports', icon: '⚽', iconClass: 'sports', label: 'Sports', sub: 'Active & outdoors' },
   { key: 'culture', icon: '🏯', iconClass: 'culture', label: 'Culture', sub: 'Local life' },
   { key: 'history', icon: '🏛️', iconClass: 'history', label: 'History', sub: 'Museums & sites' },
+  { key: 'nature', icon: '🌳', iconClass: 'pref-nature', label: 'Nature', sub: 'Parks & beaches' },
+  { key: 'shopping', icon: '🛍️', iconClass: 'pref-shopping', label: 'Shopping', sub: 'Malls & markets' },
+  { key: 'nightlife', icon: '🌃', iconClass: 'pref-nightlife', label: 'Nightlife', sub: 'Bars & late nights' },
 ];
+
+export const MAX_TRIP_DAYS = 14;
 
 export interface Vibe {
   key: string;

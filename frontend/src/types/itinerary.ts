@@ -79,6 +79,7 @@ export interface MapPin {
   name: string;
   type: string;
   day: number;
+  order?: number;
 }
 
 export interface ItineraryResponse {

@@ -1,4 +1,5 @@
 import type { DayItinerary } from '../types/itinerary';
+import { money } from './format';
 
 export interface TimelineEntry {
   time: string;
@@ -8,6 +9,9 @@ export interface TimelineEntry {
   detail: string;
   tag: string;
   tagClass: string;
+  lat: number;
+  lng: number;
+  duration?: string;
 }
 
 export function slotFor(time: string): TimelineEntry['slot'] {
@@ -25,8 +29,11 @@ export function buildTimeline(day: DayItinerary): TimelineEntry[] {
       label: a.type,
       title: a.name,
       detail: a.description,
-      tag: a.estimated_cost > 0 ? `$${a.estimated_cost}` : 'Free',
+      tag: a.estimated_cost > 0 ? money(a.estimated_cost) : 'Free',
       tagClass: '',
+      lat: a.lat,
+      lng: a.lng,
+      duration: a.duration,
     })),
     ...day.meals.map((m) => ({
       time: m.time,
@@ -34,8 +41,10 @@ export function buildTimeline(day: DayItinerary): TimelineEntry[] {
       label: m.type,
       title: m.name,
       detail: m.why || m.cuisine,
-      tag: `$${m.budget}`,
+      tag: money(m.budget),
       tagClass: 'warm',
+      lat: m.lat,
+      lng: m.lng,
     })),
   ];
   return entries.sort((a, b) => a.time.localeCompare(b.time));

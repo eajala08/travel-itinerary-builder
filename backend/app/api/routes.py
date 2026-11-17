@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from datetime import date
 
 from fastapi import APIRouter, HTTPException
 
@@ -29,25 +31,37 @@ async def generate_itinerary(trip: TripInput) -> ItineraryResponse:
     except Exception as exc:  # noqa: BLE001 - deliberately broad, this is a hard stop
         raise HTTPException(status_code=422, detail=f"Could not find destination: {exc}") from exc
 
+    # Places and weather are independent — fetch them concurrently.
+    places_result, weather_result = await asyncio.gather(
+        places_service.search_places(geocoded.lat, geocoded.lng, list(trip.interests.keys())),
+        weather_service.get_forecast(geocoded.lat, geocoded.lng, trip.start_date, trip.end_date),
+        return_exceptions=True,
+    )
+
     candidates = []
-    try:
-        candidates = await places_service.search_places(
-            geocoded.lat, geocoded.lng, list(trip.interests.keys())
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Overpass lookup failed: %s", exc)
+    if isinstance(places_result, BaseException):
+        logger.warning("Overpass lookup failed: %s", places_result)
         warnings.append("Could not fetch nearby places (Overpass unavailable); results may be sparse.")
+    else:
+        candidates = places_result
 
     weather_days = []
-    try:
-        weather_days = await weather_service.get_forecast(
-            geocoded.lat, geocoded.lng, trip.start_date, trip.end_date
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Weather lookup failed: %s", exc)
-        warnings.append("Could not fetch weather forecast; itinerary won't be weather-aware.")
+    if isinstance(weather_result, BaseException):
+        logger.warning("Weather lookup failed: %s", weather_result)
+        days_out = (date.fromisoformat(trip.start_date) - date.today()).days
+        if days_out > weather_service.FORECAST_HORIZON_DAYS:
+            warnings.append(
+                f"Weather forecasts only reach {weather_service.FORECAST_HORIZON_DAYS} days ahead; "
+                "this itinerary isn't weather-aware yet. Rebuild closer to the trip for weather tips."
+            )
+        else:
+            warnings.append("Could not fetch weather forecast; itinerary won't be weather-aware.")
+    else:
+        weather_days = weather_result
 
-    ranked = rank_candidates(candidates, trip.interests)
+    # OSRM's matrix is capped, so only cluster as many candidates as it covers;
+    # the matrix is indexed in the same order as this list.
+    ranked = rank_candidates(candidates, trip.interests)[: routes_service.MAX_CANDIDATES_FOR_MATRIX]
 
     matrix: list[list[float]] = []
     if len(ranked) >= 2:
@@ -59,15 +73,13 @@ async def generate_itinerary(trip: TripInput) -> ItineraryResponse:
             logger.warning("OSRM lookup failed: %s", exc)
             warnings.append("Could not compute travel times; day clustering is less precise.")
 
-    start = trip.start_date
-    end = trip.end_date
-    from datetime import date
-
-    num_days = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
-    clusters = cluster_into_days(ranked, matrix, num_days=max(num_days, 1))
+    clusters = cluster_into_days(ranked, matrix, num_days=trip.num_days)
 
     try:
-        return itinerary_service.generate_itinerary(
+        # The Groq SDK call is synchronous; run it off the event loop so one
+        # slow generation doesn't block every other request.
+        return await asyncio.to_thread(
+            itinerary_service.generate_itinerary,
             destination=trip.destination,
             start_date=trip.start_date,
             end_date=trip.end_date,
@@ -87,8 +99,11 @@ async def generate_itinerary(trip: TripInput) -> ItineraryResponse:
 @router.post("/edit-itinerary", response_model=ItineraryResponse)
 async def edit_itinerary(request: EditRequest) -> ItineraryResponse:
     try:
-        return itinerary_service.edit_itinerary(
-            request.itinerary, request.instruction, request.target_day
+        return await asyncio.to_thread(
+            itinerary_service.edit_itinerary,
+            request.itinerary,
+            request.instruction,
+            request.target_day,
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Failed to edit itinerary: {exc}") from exc

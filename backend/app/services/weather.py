@@ -4,6 +4,9 @@ from app.models.schemas import WeatherDay
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
+# Open-Meteo's free forecast endpoint only covers ~16 days ahead.
+FORECAST_HORIZON_DAYS = 16
+
 # WMO weather codes -> human-readable condition
 _WEATHER_CODES: dict[int, str] = {
     0: "Clear",
