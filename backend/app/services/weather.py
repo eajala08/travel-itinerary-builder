@@ -1,6 +1,7 @@
 import httpx
 
 from app.models.schemas import WeatherDay
+from app.services import cache
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -43,6 +44,11 @@ def _advice_for(condition: str, temp_c: float, precip_prob: float) -> str:
 
 
 async def get_forecast(lat: float, lng: float, start_date: str, end_date: str) -> list[WeatherDay]:
+    cache_key = f"weather:{lat:.2f},{lng:.2f}:{start_date}:{end_date}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     async with httpx.AsyncClient(timeout=10) as client:
         response = await client.get(
             OPEN_METEO_URL,
@@ -77,4 +83,5 @@ async def get_forecast(lat: float, lng: float, start_date: str, end_date: str) -
                 advice=_advice_for(condition, temp, precip),
             )
         )
+    cache.put(cache_key, days, ttl_seconds=30 * 60)
     return days

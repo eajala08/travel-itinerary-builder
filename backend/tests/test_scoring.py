@@ -77,3 +77,27 @@ def test_cluster_into_days_prefers_geographically_close_members():
     day_of = {candidate.id: day for day, members in clusters.items() for candidate in members}
     assert day_of["a"] == day_of["b"]
     assert day_of["c"] != day_of["a"]
+
+
+def test_assign_restaurants_picks_the_nearest_for_each_day():
+    from app.services.scoring import assign_restaurants
+
+    clusters = {1: [make_candidate("north-sight", "temple", lat=1.0, lng=0.0)],
+                2: [make_candidate("south-sight", "museum", lat=-1.0, lng=0.0)]}
+    restaurants = [
+        make_candidate("south-cafe", "restaurant", lat=-1.01, lng=0.0),
+        make_candidate("north-cafe", "restaurant", lat=1.01, lng=0.0),
+    ]
+    assigned = assign_restaurants(clusters, restaurants, per_day=1)
+    assert [r.id for r in assigned[1]] == ["north-cafe"]
+    assert [r.id for r in assigned[2]] == ["south-cafe"]
+
+
+def test_assign_restaurants_never_reuses_a_restaurant():
+    from app.services.scoring import assign_restaurants
+
+    clusters = {1: [make_candidate("a", "temple")], 2: [make_candidate("b", "temple")]}
+    restaurants = [make_candidate(f"r{i}", "restaurant") for i in range(3)]
+    assigned = assign_restaurants(clusters, restaurants, per_day=5)
+    ids = [r.id for day in assigned.values() for r in day]
+    assert sorted(ids) == ["r0", "r1", "r2"]

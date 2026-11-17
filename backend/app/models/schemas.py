@@ -55,12 +55,13 @@ class Activity(BaseModel):
     time: str
     name: str
     type: str
-    description: str
+    description: str = ""
     address: str = ""
-    lat: float
-    lng: float
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     duration: str = ""
     estimated_cost: float = 0
+    verified: bool = False  # True when the name matches a place we actually looked up
 
 
 class Meal(BaseModel):
@@ -69,10 +70,11 @@ class Meal(BaseModel):
     name: str
     cuisine: str = ""
     address: str = ""
-    lat: float
-    lng: float
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     budget: float = 0
     why: str = ""
+    verified: bool = False
 
 
 class DailySpend(BaseModel):
@@ -80,6 +82,23 @@ class DailySpend(BaseModel):
     activities: float = 0
     transport: float = 0
     total: float = 0
+
+
+class RouteLeg(BaseModel):
+    duration_min: float
+    distance_km: float
+
+
+class DayRoute(BaseModel):
+    geometry: list[list[float]] = Field(default_factory=list)  # [lat, lng] pairs
+    legs: list[RouteLeg] = Field(default_factory=list)
+
+
+class PoolPlace(BaseModel):
+    name: str
+    type: str
+    lat: float
+    lng: float
 
 
 class DayItinerary(BaseModel):
@@ -91,6 +110,7 @@ class DayItinerary(BaseModel):
     weather: Optional[WeatherDay] = None
     daily_spend: DailySpend = Field(default_factory=DailySpend)
     travel_tips: str = ""
+    route: Optional[DayRoute] = None
 
 
 class BudgetBreakdown(BaseModel):
@@ -111,6 +131,7 @@ class ItineraryResponse(BaseModel):
     itinerary: list[DayItinerary]
     map_pins: list[dict] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    places: list[PoolPlace] = Field(default_factory=list)  # real places edits may draw from
 
 
 class EditRequest(BaseModel):

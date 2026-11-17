@@ -1,6 +1,7 @@
 import httpx
 
 from app.models.schemas import Candidate
+from app.services import cache
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
@@ -42,49 +43,62 @@ CATEGORY_TAGS: dict[str, list[tuple[str, str, str]]] = {
     ],
 }
 
-DEFAULT_CATEGORIES = ["food", "culture", "history"]
+DEFAULT_SIGHT_CATEGORIES = ["culture", "history"]
+MAX_RESTAURANTS = 40
+MAX_SIGHTS = 60
 
 
-def _build_query(lat: float, lng: float, radius_m: int, categories: list[str]) -> str:
-    tag_filters: list[tuple[str, str, str]] = []
-    for category in categories:
-        tag_filters.extend(CATEGORY_TAGS.get(category, []))
-    if not tag_filters:
-        for category in DEFAULT_CATEGORIES:
-            tag_filters.extend(CATEGORY_TAGS[category])
+def sight_categories(interests: list[str]) -> list[str]:
+    """Non-food categories to look up; every trip needs things to do between meals."""
+    chosen = [c for c in interests if c != "food" and c in CATEGORY_TAGS]
+    return chosen or DEFAULT_SIGHT_CATEGORIES
 
-    clauses = "\n".join(
-        f'  node["{key}"="{value}"](around:{radius_m},{lat},{lng});'
-        for key, value, _ in tag_filters
+
+def _clauses(filters: list[tuple[str, str, str]], lat: float, lng: float, radius_m: int) -> str:
+    return "\n".join(
+        f'  node["{key}"="{value}"](around:{radius_m},{lat},{lng});' for key, value, _ in filters
     )
+
+
+def build_query(lat: float, lng: float, radius_m: int, interests: list[str]) -> str:
+    """Restaurants and sights are fetched as separate sets so that in a dense
+    city one can't crowd the other out of the result limit."""
+    sight_filters: list[tuple[str, str, str]] = []
+    for category in sight_categories(interests):
+        sight_filters.extend(CATEGORY_TAGS[category])
+
     return f"""
 [out:json][timeout:25];
 (
-{clauses}
-);
-out center 60;
+{_clauses(CATEGORY_TAGS["food"], lat, lng, radius_m)}
+)->.food;
+(
+{_clauses(sight_filters, lat, lng, radius_m)}
+)->.sights;
+.food out center {MAX_RESTAURANTS};
+.sights out center {MAX_SIGHTS};
 """
 
 
-def _candidate_type_for_tags(tags: dict[str, str], tag_filters: list[tuple[str, str, str]]) -> str:
-    for key, value, candidate_type in tag_filters:
-        if tags.get(key) == value:
-            return candidate_type
+def _candidate_type_for_tags(tags: dict[str, str]) -> str:
+    for filters in CATEGORY_TAGS.values():
+        for key, value, candidate_type in filters:
+            if tags.get(key) == value:
+                return candidate_type
     return "other"
 
 
 async def search_places(
     lat: float, lng: float, interests: list[str], radius_m: int = 5000
 ) -> list[Candidate]:
-    tag_filters: list[tuple[str, str, str]] = []
-    for category in interests or DEFAULT_CATEGORIES:
-        tag_filters.extend(CATEGORY_TAGS.get(category, []))
-    if not tag_filters:
-        for category in DEFAULT_CATEGORIES:
-            tag_filters.extend(CATEGORY_TAGS[category])
+    """Real restaurants plus real sights near a point. Restaurants have type "restaurant"."""
+    cache_key = f"places:{lat:.3f},{lng:.3f}:{radius_m}:{','.join(sorted(sight_categories(interests)))}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        # Copies, because ranking and clustering mutate candidates.
+        return [c.model_copy() for c in cached]
 
-    query = _build_query(lat, lng, radius_m, interests)
-
+    query = build_query(lat, lng, radius_m, interests)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             OVERPASS_URL,
@@ -99,18 +113,22 @@ async def search_places(
     for element in elements:
         tags = element.get("tags", {})
         name = tags.get("name")
-        if not name or name in seen_names:
+        lat_value = element.get("lat") or element.get("center", {}).get("lat")
+        lng_value = element.get("lon") or element.get("center", {}).get("lon")
+        if not name or name in seen_names or lat_value is None or lng_value is None:
             continue
         seen_names.add(name)
         candidates.append(
             Candidate(
                 id=str(element["id"]),
                 name=name,
-                type=_candidate_type_for_tags(tags, tag_filters),
-                lat=element.get("lat") or element.get("center", {}).get("lat"),
-                lng=element.get("lon") or element.get("center", {}).get("lon"),
+                type=_candidate_type_for_tags(tags),
+                lat=lat_value,
+                lng=lng_value,
                 tags=tags,
                 source="overpass",
             )
         )
-    return candidates
+
+    cache.put(cache_key, candidates, ttl_seconds=3600)
+    return [c.model_copy() for c in candidates]

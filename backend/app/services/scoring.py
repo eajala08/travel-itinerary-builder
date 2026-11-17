@@ -1,3 +1,5 @@
+import math
+
 from app.models.schemas import Candidate
 
 TYPE_TO_INTEREST: dict[str, str] = {
@@ -78,3 +80,41 @@ def cluster_into_days(
             candidate.cluster_day = day
         result[day] = assigned
     return result
+
+
+def _distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Straight-line (haversine) distance; good enough to pick the nearest restaurants."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = (
+        math.sin((p2 - p1) / 2) ** 2
+        + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lng2 - lng1) / 2) ** 2
+    )
+    return 6371 * 2 * math.asin(math.sqrt(a))
+
+
+def assign_restaurants(
+    clusters: dict[int, list[Candidate]],
+    restaurants: list[Candidate],
+    per_day: int = 5,
+) -> dict[int, list[Candidate]]:
+    """
+    Gives each day the restaurants nearest to that day's sights, so meals don't
+    pull the traveler away from where they already are. Each restaurant goes to
+    at most one day. Days with no sights take whatever is left, in order.
+    """
+    remaining = list(restaurants)
+    assigned: dict[int, list[Candidate]] = {day: [] for day in clusters}
+
+    for _ in range(per_day):
+        for day, sights in clusters.items():
+            if not remaining:
+                return assigned
+            if sights:
+                center_lat = sum(s.lat for s in sights) / len(sights)
+                center_lng = sum(s.lng for s in sights) / len(sights)
+                pick = min(remaining, key=lambda r: _distance_km(center_lat, center_lng, r.lat, r.lng))
+            else:
+                pick = remaining[0]
+            remaining.remove(pick)
+            assigned[day].append(pick)
+    return assigned

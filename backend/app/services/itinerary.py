@@ -1,20 +1,16 @@
 import json
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from groq import Groq
 
 from app.config import settings
-from app.models.schemas import (
-    BudgetBreakdown,
-    Candidate,
-    ItineraryResponse,
-    Preferences,
-    WeatherDay,
-)
+from app.models.schemas import Candidate, ItineraryResponse, PoolPlace, Preferences, WeatherDay
 from app.services.scoring import is_outdoor
 
 _client: Optional[Groq] = None
+
+_ACTIVITIES_PER_DAY = {"relaxed": "2-3", "moderate": "3-4", "packed": "4"}
 
 
 def _get_client() -> Groq:
@@ -31,6 +27,67 @@ def _daterange(start_date: str, end_date: str) -> list[str]:
     return [(start + timedelta(days=i)).isoformat() for i in range(days)]
 
 
+def _num(value: Any) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _name_key(name: Any) -> str:
+    return str(name or "").strip().casefold()
+
+
+def _day_block(
+    day: int,
+    day_date: str,
+    sights: list[Candidate],
+    restaurants: list[Candidate],
+    weather: Optional[WeatherDay],
+) -> str:
+    forecast = (
+        f"{weather.condition}, {weather.temp_c}°C, {weather.precipitation_probability}% chance of rain"
+        if weather
+        else "no forecast available"
+    )
+    sight_lines = [
+        f'    - "{s.name}" ({s.type}, interest match {s.score or 0:.0f}/10)'
+        + (" [OUTDOOR]" if is_outdoor(s.type) else "")
+        for s in sights
+    ] or ["    (none found)"]
+    restaurant_lines = [
+        f'    - "{r.name}"' + (f' ({r.tags["cuisine"]})' if r.tags.get("cuisine") else "")
+        for r in restaurants
+    ] or ["    (none found)"]
+    return "\n".join(
+        [f"DAY {day} ({day_date}) — forecast: {forecast}", "  SIGHTS:", *sight_lines, "  RESTAURANTS:", *restaurant_lines]
+    )
+
+
+_RESPONSE_SHAPE = """{
+  "budget_breakdown": {"shopping": <number>},
+  "itinerary": [
+    {
+      "day": 1,
+      "theme": "short theme",
+      "activities": [
+        {"time": "09:00", "name": "<exact name from the list>", "type": "temple|museum|culture|history|shopping|nature|nightlife|sports|other", "description": "...", "duration": "1.5h", "estimated_cost": 0}
+      ],
+      "meals": [
+        {"time": "08:00", "type": "breakfast|lunch|dinner", "name": "<exact name from the list>", "cuisine": "...", "budget": 10, "why": "..."}
+      ],
+      "daily_spend": {"transport": 0},
+      "travel_tips": "..."
+    }
+  ]
+}"""
+
+_GROUNDING_RULES = """- Every activity must be one of the real places listed, written with its EXACT name as given.
+- Every meal must be one of the real restaurants listed, written with its EXACT name as given.
+- If nothing suitable is listed, use a generic label such as "Lunch near <sight name>". Never invent the name of a specific business or attraction.
+- Costs are in US dollars, for the whole group."""
+
+
 def _build_generation_prompt(
     destination: str,
     dates: list[str],
@@ -39,83 +96,44 @@ def _build_generation_prompt(
     interests: dict[str, int],
     preferences: Preferences,
     notes: str,
-    clusters: dict[int, list[Candidate]],
+    sights: dict[int, list[Candidate]],
+    restaurants: dict[int, list[Candidate]],
     weather: list[WeatherDay],
 ) -> str:
-    candidate_lines = []
-    for day, members in sorted(clusters.items()):
-        for c in members:
-            flag = " [OUTDOOR]" if is_outdoor(c.type) else ""
-            candidate_lines.append(
-                f'  Day {day} cluster: "{c.name}" (type={c.type}, score={c.score}, '
-                f"lat={c.lat}, lng={c.lng}){flag}"
-            )
-    candidates_block = "\n".join(candidate_lines) or "  (no candidate data available)"
-
-    weather_lines = [
-        f"  {w.date}: {w.condition}, {w.temp_c}°C, {w.precipitation_probability}% precip — {w.advice}"
-        for w in weather
-    ] or ["  (no weather data available)"]
-
+    weather_by_date = {w.date: w for w in weather}
+    day_blocks = "\n\n".join(
+        _day_block(i + 1, d, sights.get(i + 1, []), restaurants.get(i + 1, []), weather_by_date.get(d))
+        for i, d in enumerate(dates)
+    )
     days = len(dates)
     daily_budget = budget / days if days else budget
-    food_budget = round(daily_budget * 0.35)
-    activities_budget = round(daily_budget * 0.35)
-    transport_budget = round(daily_budget * 0.15)
-    shopping_budget = round(daily_budget * 0.15)
 
     return f"""
-You are an expert travel planner. Build a realistic day-by-day itinerary
-using ONLY the real candidate places listed below (do not invent new
-places) — pick, order, and time them sensibly.
+You are an expert travel planner. Build a realistic day-by-day itinerary for
+the trip below by choosing, ordering, and timing places from the lists given
+for each day.
 
 DESTINATION: {destination}
 DATES: {dates[0]} to {dates[-1]} ({days} days)
 TRAVELERS: {travelers}
-TOTAL BUDGET (activities + food + local transport + shopping, NOT flights/hotels): ${budget}
+TOTAL BUDGET (activities + food + local transport + shopping, NOT flights/hotels): ${budget:.0f}, about ${daily_budget:.0f} per day
 INTERESTS (0-10 weights): {json.dumps(interests)}
 PREFERENCES: pace={preferences.pace}, tourist_level={preferences.tourist_level}, walking={preferences.walking}
-NOTES: {notes or "none"}
+NOTES FROM THE TRAVELER: {notes or "none"}
 
-PER-DAY BUDGET TARGET:
-  food: ${food_budget}, activities: ${activities_budget}, transport: ${transport_budget}, shopping: ${shopping_budget}
+REAL PLACES, already grouped so each day stays in one part of the city:
 
-CANDIDATE PLACES (already geographically clustered by day, ranked by interest match):
-{candidates_block}
-
-WEATHER FORECAST:
-{chr(10).join(weather_lines)}
+{day_blocks}
 
 RULES:
-- Avoid scheduling [OUTDOOR] candidates on days with rain/high precipitation probability; prefer indoor alternatives from the pool for that day instead.
-- Keep each day's activities geographically coherent (they were pre-clustered for this).
-- Include realistic meal slots (breakfast ~08:00, lunch ~12:30, dinner ~18:30) even if no specific restaurant candidate was supplied — use a plausible local restaurant name and cuisine in that case.
-- Respect the budget targets; do not wildly overspend.
-- Respond with ONLY valid JSON (no markdown fences, no commentary) matching this shape:
+{_GROUNDING_RULES}
+- Plan {_ACTIVITIES_PER_DAY.get(preferences.pace, "3-4")} activities per day, plus breakfast (~08:00), lunch (~12:30), and dinner (~18:30). You do not have to use every place listed.
+- Keep each day's places within that day's own lists.
+- Avoid [OUTDOOR] places on days with a high chance of rain.
+- Stay within the budget.
+- Respond with ONLY valid JSON matching this shape:
 
-{{
-  "destination": "{destination}",
-  "dates": {json.dumps(dates)},
-  "duration_days": {days},
-  "total_budget": {budget},
-  "estimated_spend": <number>,
-  "budget_breakdown": {{"food": <number>, "activities": <number>, "transport": <number>, "shopping": <number>, "buffer": <number>}},
-  "itinerary": [
-    {{
-      "day": 1,
-      "date": "{dates[0]}",
-      "theme": "short theme",
-      "activities": [
-        {{"time": "09:00", "name": "...", "type": "temple|museum|market|shopping|nature|nightlife|sports|other", "description": "...", "address": "...", "lat": 0.0, "lng": 0.0, "duration": "1.5h", "estimated_cost": 0}}
-      ],
-      "meals": [
-        {{"time": "08:00", "type": "breakfast", "name": "...", "cuisine": "...", "address": "...", "lat": 0.0, "lng": 0.0, "budget": 10, "why": "..."}}
-      ],
-      "daily_spend": {{"food": 0, "activities": 0, "transport": 0, "total": 0}},
-      "travel_tips": "..."
-    }}
-  ]
-}}
+{_RESPONSE_SHAPE}
 """.strip()
 
 
@@ -145,6 +163,109 @@ def _call_llm(prompt: str, retry_note: Optional[str] = None) -> dict:
     return _parse_itinerary_json(text)
 
 
+def _call_llm_with_retry(prompt: str) -> dict:
+    try:
+        return _call_llm(prompt)
+    except (json.JSONDecodeError, ValueError):
+        return _call_llm(
+            prompt,
+            retry_note="Your last response was not valid JSON. Reply with ONLY the raw JSON object, no markdown fences, no commentary.",
+        )
+
+
+def _finalize(
+    data: dict,
+    *,
+    destination: str,
+    dates: list[str],
+    total_budget: float,
+    pool: list[PoolPlace],
+    weather: list[WeatherDay],
+    warnings: list[str],
+) -> ItineraryResponse:
+    """
+    Turns raw LLM output into a trustworthy response. Everything the model
+    could get wrong but we can know for certain is set here rather than taken
+    from the model: trip fields, coordinates, weather, and all arithmetic.
+    """
+    pool_by_name = {_name_key(p.name): p for p in pool}
+    weather_by_date = {w.date: w for w in weather}
+
+    days_out: list[dict] = []
+    pins: list[dict] = []
+    for index, day in enumerate((data.get("itinerary") or [])[: len(dates)]):
+        day_number = index + 1
+        for kind in ("activities", "meals"):
+            items = [item for item in (day.get(kind) or []) if isinstance(item, dict) and item.get("name")]
+            for item in items:
+                match = pool_by_name.get(_name_key(item["name"]))
+                item["verified"] = match is not None
+                item["lat"] = match.lat if match else None
+                item["lng"] = match.lng if match else None
+                item.setdefault("time", "12:00")
+                if kind == "activities":
+                    item.setdefault("type", match.type if match else "other")
+                    item["estimated_cost"] = _num(item.get("estimated_cost"))
+                else:
+                    item.setdefault("type", "lunch")
+                    item["budget"] = _num(item.get("budget"))
+                if match:
+                    pins.append(
+                        {
+                            "lat": match.lat,
+                            "lng": match.lng,
+                            "name": item["name"],
+                            "type": "restaurant" if kind == "meals" else item["type"],
+                            "day": day_number,
+                        }
+                    )
+            day[kind] = items
+
+        food = sum(m["budget"] for m in day["meals"])
+        activities = sum(a["estimated_cost"] for a in day["activities"])
+        transport = _num((day.get("daily_spend") or {}).get("transport"))
+        day["daily_spend"] = {
+            "food": food,
+            "activities": activities,
+            "transport": transport,
+            "total": food + activities + transport,
+        }
+        day["day"] = day_number
+        day["date"] = dates[index]
+        day.setdefault("theme", f"Day {day_number}")
+        weather_day = weather_by_date.get(dates[index])
+        day["weather"] = weather_day.model_dump() if weather_day else None
+        day["route"] = None
+        days_out.append(day)
+
+    food_total = sum(d["daily_spend"]["food"] for d in days_out)
+    activities_total = sum(d["daily_spend"]["activities"] for d in days_out)
+    transport_total = sum(d["daily_spend"]["transport"] for d in days_out)
+    shopping = _num((data.get("budget_breakdown") or {}).get("shopping"))
+    estimated = food_total + activities_total + transport_total + shopping
+
+    return ItineraryResponse.model_validate(
+        {
+            "destination": destination,
+            "dates": dates,
+            "duration_days": len(dates),
+            "total_budget": total_budget,
+            "estimated_spend": round(estimated),
+            "budget_breakdown": {
+                "food": round(food_total),
+                "activities": round(activities_total),
+                "transport": round(transport_total),
+                "shopping": round(shopping),
+                "buffer": round(max(0.0, total_budget - estimated)),
+            },
+            "itinerary": days_out,
+            "map_pins": pins,
+            "warnings": warnings,
+            "places": [p.model_dump() for p in pool],
+        }
+    )
+
+
 def generate_itinerary(
     destination: str,
     start_date: str,
@@ -154,82 +275,123 @@ def generate_itinerary(
     interests: dict[str, int],
     preferences: Preferences,
     notes: str,
-    clusters: dict[int, list[Candidate]],
+    sights: dict[int, list[Candidate]],
+    restaurants: dict[int, list[Candidate]],
+    pool: list[Candidate],
     weather: list[WeatherDay],
     warnings: list[str],
 ) -> ItineraryResponse:
     dates = _daterange(start_date, end_date)
     prompt = _build_generation_prompt(
-        destination, dates, budget, travelers, interests, preferences, notes, clusters, weather
+        destination, dates, budget, travelers, interests, preferences, notes, sights, restaurants, weather
+    )
+    data = _call_llm_with_retry(prompt)
+    return _finalize(
+        data,
+        destination=destination,
+        dates=dates,
+        total_budget=budget,
+        pool=[PoolPlace(name=c.name, type=c.type, lat=c.lat, lng=c.lng) for c in pool],
+        weather=weather,
+        warnings=warnings,
     )
 
-    try:
-        data = _call_llm(prompt)
-    except (json.JSONDecodeError, ValueError):
-        data = _call_llm(
-            prompt,
-            retry_note="Your last response was not valid JSON. Reply with ONLY the raw JSON object, no markdown fences, no commentary.",
-        )
 
-    data.setdefault("map_pins", [])
-    for day in data.get("itinerary", []):
-        pins = [
-            {"lat": a["lat"], "lng": a["lng"], "name": a["name"], "type": a["type"], "day": day["day"]}
-            for a in day.get("activities", [])
-        ]
-        data["map_pins"].extend(pins)
+def _trimmed_for_prompt(current: ItineraryResponse) -> dict:
+    """The current plan without anything the model doesn't need to see or echo back."""
+    return {
+        "budget_breakdown": {"shopping": current.budget_breakdown.shopping},
+        "itinerary": [
+            {
+                "day": d.day,
+                "date": d.date,
+                "theme": d.theme,
+                "activities": [
+                    a.model_dump(include={"time", "name", "type", "description", "duration", "estimated_cost"})
+                    for a in d.activities
+                ],
+                "meals": [
+                    m.model_dump(include={"time", "type", "name", "cuisine", "budget", "why"}) for m in d.meals
+                ],
+                "daily_spend": {"transport": d.daily_spend.transport},
+                "travel_tips": d.travel_tips,
+            }
+            for d in current.itinerary
+        ],
+    }
 
-    # Never trust the LLM to correctly echo back structured fields it was
-    # explicitly given — force them from the actual request, same as
-    # edit_itinerary already does for its own follow-up calls.
-    data["destination"] = destination
-    data["dates"] = dates
-    data["duration_days"] = len(dates)
-    data["total_budget"] = budget
-    data["warnings"] = warnings
-    return ItineraryResponse.model_validate(data)
+
+def _edit_pool(current: ItineraryResponse) -> list[PoolPlace]:
+    """Known real places, plus anything already on the map (trips saved before
+    the pool existed carry coordinates only on their own stops)."""
+    pool = list(current.places)
+    known = {_name_key(p.name) for p in pool}
+    for day in current.itinerary:
+        stops = [(a, a.type) for a in day.activities] + [(m, "restaurant") for m in day.meals]
+        for stop, stop_type in stops:
+            if stop.lat is not None and stop.lng is not None and _name_key(stop.name) not in known:
+                known.add(_name_key(stop.name))
+                pool.append(PoolPlace(name=stop.name, type=stop_type, lat=stop.lat, lng=stop.lng))
+    return pool
 
 
 def edit_itinerary(current: ItineraryResponse, instruction: str, target_day: Optional[int]) -> ItineraryResponse:
-    scope = f"Only modify day {target_day}; leave every other day unchanged." if target_day else (
-        "You may adjust any day as needed."
+    scope = (
+        f"Only change day {target_day}; return every other day exactly as it is."
+        if target_day
+        else "You may adjust any day as needed."
     )
+    weather_lines = [
+        f"  Day {d.day} ({d.date}): {d.weather.condition}, {d.weather.precipitation_probability}% chance of rain"
+        for d in current.itinerary
+        if d.weather
+    ] or ["  (no forecast available)"]
+    pool_lines = [
+        f'  - "{p.name}" ({p.type})' + (" [OUTDOOR]" if is_outdoor(p.type) else "") for p in _edit_pool(current)
+    ] or ["  (none available)"]
+
     prompt = f"""
-You are editing an existing travel itinerary based on user feedback.
+You are editing an existing travel itinerary for {current.destination} based on the traveler's request.
 
 CURRENT ITINERARY (JSON):
-{current.model_dump_json()}
+{json.dumps(_trimmed_for_prompt(current), ensure_ascii=False)}
 
-USER INSTRUCTION: "{instruction}"
+TRAVELER'S REQUEST: "{instruction}"
 {scope}
 
-RULES:
-- Keep "destination", "dates", "duration_days", and "total_budget" EXACTLY
-  as they are in the current itinerary — these reflect the user's original
-  trip and must never change from an edit instruction.
-- Only "estimated_spend", "budget_breakdown", and "itinerary" (and
-  "map_pins" to match) should change to reflect the requested edit.
+TOTAL BUDGET: ${current.total_budget:.0f}
 
-Respond with ONLY the complete updated itinerary as valid JSON, in the exact
-same shape as the input (same top-level fields: destination, dates,
-duration_days, total_budget, estimated_spend, budget_breakdown, itinerary,
-map_pins, warnings). No markdown fences, no commentary.
+WEATHER:
+{chr(10).join(weather_lines)}
+
+REAL PLACES you may add (type "restaurant" entries are for meals):
+{chr(10).join(pool_lines)}
+
+RULES:
+{_GROUNDING_RULES}
+- Places already in the itinerary may stay as they are.
+- Respond with ONLY the complete updated itinerary as valid JSON matching this shape:
+
+{_RESPONSE_SHAPE}
 """.strip()
 
-    try:
-        data = _call_llm(prompt)
-    except (json.JSONDecodeError, ValueError):
-        data = _call_llm(
-            prompt,
-            retry_note="Your last response was not valid JSON. Reply with ONLY the raw JSON object.",
-        )
+    data = _call_llm_with_retry(prompt)
 
-    # Don't rely on the LLM to honor the "don't change these" instruction —
-    # enforce it directly so an edit can never silently alter the user's
-    # original trip parameters.
-    data["destination"] = current.destination
-    data["dates"] = current.dates
-    data["duration_days"] = current.duration_days
-    data["total_budget"] = current.total_budget
+    # A single-day edit must not touch the other days, whatever the model returns.
+    if target_day:
+        current_days = _trimmed_for_prompt(current)["itinerary"]
+        edited = {d.get("day"): d for d in (data.get("itinerary") or []) if isinstance(d, dict)}
+        data["itinerary"] = [
+            edited.get(d["day"], d) if d["day"] == target_day else d for d in current_days
+        ]
+        data["budget_breakdown"] = {"shopping": current.budget_breakdown.shopping}
 
-    return ItineraryResponse.model_validate(data)
+    return _finalize(
+        data,
+        destination=current.destination,
+        dates=current.dates,
+        total_budget=current.total_budget,
+        pool=_edit_pool(current),
+        weather=[d.weather for d in current.itinerary if d.weather],
+        warnings=current.warnings,
+    )
