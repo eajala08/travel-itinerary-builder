@@ -53,12 +53,12 @@ def _day_block(
         else "no forecast available"
     )
     sight_lines = [
-        f'    - "{s.name}" ({s.type}, interest match {s.score or 0:.0f}/10)'
+        f'    - "{s.name}" ({s.type}, interest match {s.score or 0:.0f}/10, at {s.lat:.4f},{s.lng:.4f})'
         + (" [OUTDOOR]" if is_outdoor(s.type) else "")
         for s in sights
     ] or ["    (none found)"]
     restaurant_lines = [
-        f'    - "{r.name}"' + (f' ({r.tags["cuisine"]})' if r.tags.get("cuisine") else "")
+        f'    - "{r.name}" (at {r.lat:.4f},{r.lng:.4f})' + (f' ({r.tags["cuisine"]})' if r.tags.get("cuisine") else "")
         for r in restaurants
     ] or ["    (none found)"]
     return "\n".join(
@@ -133,6 +133,7 @@ RULES:
 {_GROUNDING_RULES}
 - Plan {_ACTIVITIES_PER_DAY.get(preferences.pace, "3-4")} activities per day, plus breakfast (~08:00), lunch (~12:30), and dinner (~18:30). You do not have to use every place listed.
 - Keep each day's places within that day's own lists.
+- Use the coordinates: order each day so the traveler moves steadily through one area, picking meal spots close to the stops before and after them. Avoid backtracking and long hops.
 - Avoid [OUTDOOR] places on days with a high chance of rain.
 - Stay within the budget.
 - Respond with ONLY valid JSON matching this shape:

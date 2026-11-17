@@ -14,6 +14,19 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 # Fallback when Overpass is down or saturated, which happens often on the
 # public instance. Same OpenStreetMap data, fewer tags (no cuisine).
 PHOTON_REVERSE_URL = "https://photon.komoot.io/reverse"
+# Last resort. Nominatim's usage policy allows at most one request per second,
+# so this path is slower and strictly sequential.
+NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_PHRASES: dict[str, list[str]] = {
+    "food": ["restaurant", "cafe"],
+    "culture": ["place of worship", "attraction"],
+    "history": ["museum", "monument"],
+    "fashion": ["clothes shop"],
+    "shopping": ["mall", "department store"],
+    "nature": ["park"],
+    "nightlife": ["bar"],
+    "sports": ["sports centre"],
+}
 _HEADERS = {"User-Agent": "travel-itinerary-builder/1.0"}
 
 # Maps a user-facing interest key to Overpass tag filters and a candidate "type".
@@ -146,11 +159,49 @@ async def _from_photon(lat: float, lng: float, radius_m: int, interests: list[st
                 found.append(_candidate(props.get("osm_id"), props["name"], {key: value}, f_lat, f_lng, "photon"))
             return found
 
-        results = await asyncio.gather(*(one(k, v) for k, v, _ in filters), return_exceptions=True)
+        # At most two at a time: bursting this free service gets the caller refused.
+        limit = asyncio.Semaphore(2)
+
+        async def polite(key: str, value: str) -> list[Candidate]:
+            async with limit:
+                return await one(key, value)
+
+        results = await asyncio.gather(*(polite(k, v) for k, v, _ in filters), return_exceptions=True)
 
     candidates = [c for r in results if not isinstance(r, BaseException) for c in r]
     if not candidates and any(isinstance(r, BaseException) for r in results):
         raise next(r for r in results if isinstance(r, BaseException))
+    return candidates
+
+
+def _viewbox(lat: float, lng: float, radius_m: int) -> str:
+    south, west, north, east = (float(x) for x in _bbox(lat, lng, radius_m).split(","))
+    return f"{west},{north},{east},{south}"
+
+
+async def _from_nominatim(lat: float, lng: float, radius_m: int, interests: list[str]) -> list[Candidate]:
+    phrases = NOMINATIM_PHRASES["food"] + [p for c in sight_categories(interests) for p in NOMINATIM_PHRASES[c]]
+    candidates: list[Candidate] = []
+    async with httpx.AsyncClient(timeout=10) as client:
+        for i, phrase in enumerate(phrases):
+            if i:
+                await asyncio.sleep(1.1)
+            try:
+                response = await client.get(
+                    NOMINATIM_SEARCH_URL,
+                    params={"q": phrase, "format": "jsonv2", "limit": 40, "bounded": 1, "viewbox": _viewbox(lat, lng, radius_m)},
+                    headers=_HEADERS,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.warning("Nominatim search for %r failed: %s", phrase, exc)
+                continue
+            for row in response.json():
+                if row.get("name"):
+                    tags = {row["category"]: row["type"]}
+                    candidates.append(
+                        _candidate(row["osm_id"], row["name"], tags, float(row["lat"]), float(row["lon"]), "nominatim")
+                    )
     return candidates
 
 
@@ -176,11 +227,15 @@ async def search_places(
         # Copies, because ranking and clustering mutate candidates.
         return [c.model_copy() for c in cached]
 
-    try:
-        candidates = await _from_overpass(lat, lng, radius_m, interests)
-    except Exception as exc:  # noqa: BLE001 - fall through to the second source
-        logger.warning("Overpass unavailable (%s); falling back to Photon", exc)
-        candidates = await _from_photon(lat, lng, radius_m, interests)
+    candidates: list[Candidate] = []
+    for source in (_from_overpass, _from_photon, _from_nominatim):
+        try:
+            candidates = await source(lat, lng, radius_m, interests)
+        except Exception as exc:  # noqa: BLE001 - try the next source
+            logger.warning("%s failed (%s: %s)", source.__name__, type(exc).__name__, exc)
+            continue
+        if candidates:
+            break
 
     candidates = _dedupe_and_cap(candidates)
     if candidates:

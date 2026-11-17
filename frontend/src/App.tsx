@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAppStore } from './lib/store';
 import { generateItinerary, editItinerary } from './lib/api';
 import { SIGNATURE_PICKS, VIBES } from './lib/constants';
@@ -12,6 +12,7 @@ import BudgetCard from './components/BudgetCard';
 import SignatureSection from './components/SignatureSection';
 import ItineraryTab from './components/ItineraryTab';
 import SavedTripsList from './components/SavedTripsList';
+import SettingsPanel from './components/SettingsPanel';
 
 const today = new Date();
 const in3Days = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
@@ -34,6 +35,8 @@ export default function App() {
   const [view, setView] = useState<View>('builder');
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>(() => getSavedTrips());
   const [justSaved, setJustSaved] = useState(false);
+  // Refs, not state: rapid clicks fire before a re-render would expose new state.
+  const requestInFlight = useRef(false);
 
   const showToast = (message: string, isError = false) => {
     setToast({ message, error: isError });
@@ -88,6 +91,7 @@ export default function App() {
   };
 
   const handleBuild = async () => {
+    if (requestInFlight.current) return;
     if (!destination.trim()) {
       showToast('Add a destination first', true);
       return;
@@ -108,6 +112,7 @@ export default function App() {
       notes,
     };
 
+    requestInFlight.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -121,22 +126,25 @@ export default function App() {
       showToast(message, true);
       setView('itinerary');
     } finally {
+      requestInFlight.current = false;
       setLoading(false);
     }
   };
 
   const handleEdit = async (instruction: string, targetDay?: number) => {
-    if (!itinerary) return;
+    if (!itinerary || requestInFlight.current) return;
+    requestInFlight.current = true;
     setEditingLoading(true);
     try {
       const updated = await editItinerary(itinerary, instruction, targetDay ?? null);
       setItinerary(updated);
-      showToast('Trip updated');
+      showToast(targetDay ? `Day ${targetDay} updated` : 'Trip updated');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update itinerary.';
       setError(message);
       showToast(message, true);
     } finally {
+      requestInFlight.current = false;
       setEditingLoading(false);
     }
   };
@@ -197,7 +205,9 @@ export default function App() {
             </p>
           </div>
 
-          {view === 'saved' ? (
+          {view === 'settings' ? (
+            <SettingsPanel />
+          ) : view === 'saved' ? (
             <SavedTripsList trips={savedTrips} onLoad={handleLoadSavedTrip} onDelete={handleDeleteSavedTrip} />
           ) : (
             <>

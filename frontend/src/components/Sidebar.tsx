@@ -1,4 +1,4 @@
-export type View = 'builder' | 'saved' | 'itinerary';
+export type View = 'builder' | 'saved' | 'itinerary' | 'settings';
 
 interface Props {
   view: View;
@@ -26,7 +26,7 @@ export default function Sidebar({ view, onNavigate, hasItinerary }: Props) {
           className={`nav-item${view === 'itinerary' ? ' active' : ''}`}
           onClick={() => onNavigate('itinerary')}
         >
-          <span className="nav-icon">🗺</span>Itinerary{hasItinerary ? '' : ' (empty)'}
+          <span className="nav-icon">🗺</span>Itinerary{hasItinerary ? '' : <small className="nav-hint"> · empty</small>}
         </button>
         <button
           type="button"
@@ -35,7 +35,11 @@ export default function Sidebar({ view, onNavigate, hasItinerary }: Props) {
         >
           <span className="nav-icon">✈</span>Saved Trips
         </button>
-        <button type="button" className="nav-item">
+        <button
+          type="button"
+          className={`nav-item${view === 'settings' ? ' active' : ''}`}
+          onClick={() => onNavigate('settings')}
+        >
           <span className="nav-icon">⚙</span>Settings
         </button>
       </nav>

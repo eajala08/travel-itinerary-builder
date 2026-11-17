@@ -101,3 +101,33 @@ def test_assign_restaurants_never_reuses_a_restaurant():
     assigned = assign_restaurants(clusters, restaurants, per_day=5)
     ids = [r.id for day in assigned.values() for r in day]
     assert sorted(ids) == ["r0", "r1", "r2"]
+
+
+def test_cluster_into_days_picks_nearby_places_over_rank_order():
+    """Ties in score must not drag a far-away place into a day just because it's ranked earlier."""
+    a = make_candidate("a", "temple")
+    far = make_candidate("far", "temple")
+    near1 = make_candidate("near1", "temple")
+    near2 = make_candidate("near2", "temple")
+    for c in (a, far, near1, near2):
+        c.score = 8
+    # Order: a, far, near1, near2. a is close to near1/near2, far from "far".
+    matrix = [
+        [0, 900, 60, 90],
+        [900, 0, 950, 980],
+        [60, 950, 0, 40],
+        [90, 980, 40, 0],
+    ]
+    clusters = cluster_into_days([a, far, near1, near2], matrix, num_days=1, max_per_day=3)
+    assert [c.id for c in clusters[1]] == ["a", "near1", "near2"]
+
+
+def test_cluster_into_days_keeps_interest_match_within_slack():
+    best = make_candidate("best", "temple")
+    close_but_irrelevant = make_candidate("irrelevant", "other")
+    farther_relevant = make_candidate("relevant", "temple")
+    best.score, close_but_irrelevant.score, farther_relevant.score = 9, 0, 8
+    # Order: best, relevant, irrelevant. "irrelevant" is right next to "best".
+    matrix = [[0, 500, 10], [500, 0, 500], [10, 500, 0]]
+    clusters = cluster_into_days([best, farther_relevant, close_but_irrelevant], matrix, num_days=1, max_per_day=2)
+    assert [c.id for c in clusters[1]] == ["best", "relevant"]

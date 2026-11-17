@@ -94,7 +94,8 @@ async def generate_itinerary(trip: TripInput) -> ItineraryResponse:
             logger.warning("OSRM lookup failed: %s", exc)
             warnings.append("Could not compute travel times; days may be less geographically tight.")
 
-    sight_clusters = cluster_into_days(sights, matrix, num_days=num_days)
+    # More options than the 3-4 a day needs, so the model can still choose.
+    sight_clusters = cluster_into_days(sights, matrix, num_days=num_days, max_per_day=6)
     restaurant_clusters = assign_restaurants(sight_clusters, restaurants)
 
     try:

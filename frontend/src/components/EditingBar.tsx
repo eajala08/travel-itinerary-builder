@@ -11,40 +11,36 @@ export default function EditingBar({ onEdit, loading }: Props) {
 
   const submitCustom = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customText.trim()) return;
+    if (!customText.trim() || loading) return;
     onEdit(customText.trim());
     setCustomText('');
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-      <h2 className="text-xl font-bold text-gray-800 mb-3">Adjust your trip</h2>
-      <div className="flex flex-wrap gap-2 mb-4">
+    <div className="it-glass it-edit">
+      <div className="it-edit-presets">
         {EDIT_PRESETS.map((preset) => (
           <button
             key={preset.label}
+            type="button"
+            className="it-action-btn"
             onClick={() => onEdit(preset.instruction)}
             disabled={loading}
-            className="text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-full disabled:opacity-50"
           >
             {preset.label}
           </button>
         ))}
       </div>
-      <form onSubmit={submitCustom} className="flex gap-2">
+      <form onSubmit={submitCustom} className="it-edit-form">
         <input
           type="text"
           value={customText}
           onChange={(e) => setCustomText(e.target.value)}
-          placeholder="Or tell it what to change, e.g. 'swap day 2 for more nightlife'"
-          className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+          placeholder="Or describe a change, e.g. “swap day 2 for more nightlife”"
+          aria-label="Describe a change to the trip"
         />
-        <button
-          type="submit"
-          disabled={loading}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-        >
-          {loading ? 'Updating…' : 'Send'}
+        <button type="submit" className="it-action-btn it-primary" disabled={loading || !customText.trim()}>
+          {loading ? 'Updating…' : 'Apply'}
         </button>
       </form>
     </div>

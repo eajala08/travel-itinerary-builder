@@ -36,6 +36,9 @@ def rank_candidates(candidates: list[Candidate], interests: dict[str, int]) -> l
     return sorted(candidates, key=lambda c: c.score or 0, reverse=True)
 
 
+SCORE_SLACK = 2.0
+
+
 def cluster_into_days(
     candidates: list[Candidate],
     matrix: list[list[float]],
@@ -43,35 +46,35 @@ def cluster_into_days(
     max_per_day: int = 4,
 ) -> dict[int, list[Candidate]]:
     """
-    Greedily assigns candidates (assumed already ranked, best first) to day
-    clusters so that each day's activities are geographically close together.
-    `matrix` must be indexed the same order as `candidates`; pass an empty
-    matrix to fall back to a round-robin assignment with no geo-awareness.
-    """
-    clusters: dict[int, list[int]] = {day: [] for day in range(1, num_days + 1)}
-    if not candidates:
-        return {day: [] for day in range(1, num_days + 1)}
+    Builds each day as one compact area: seed it with the best-scoring place
+    left, then grow it with the places closest to what's already in the day.
+    Growth only considers places scoring within SCORE_SLACK of the seed, so
+    proximity never trades away the user's interests entirely.
 
-    for idx, candidate in enumerate(candidates):
-        best_day = None
-        best_avg = None
-        for day, members in clusters.items():
-            if len(members) >= max_per_day:
-                continue
+    `candidates` must be ranked best first, and `matrix` indexed in the same
+    order. With an empty matrix, days are simply filled in rank order.
+    """
+    remaining = list(range(len(candidates)))
+    clusters: dict[int, list[int]] = {}
+
+    def score(i: int) -> float:
+        return candidates[i].score or 0.0
+
+    for day in range(1, num_days + 1):
+        if not remaining:
+            clusters[day] = []
+            continue
+        seed = remaining.pop(0)
+        members = [seed]
+        while len(members) < max_per_day and remaining:
             if not matrix:
-                # No geo data available: every cluster is equally "close".
-                avg = 0.0
-            elif not members:
-                # Prefer joining a nearby populated cluster over starting a
-                # new empty one, unless no populated cluster has room.
-                avg = float("inf")
+                pick = remaining[0]
             else:
-                avg = sum(matrix[idx][m] for m in members) / len(members)
-            if best_avg is None or avg < best_avg:
-                best_avg = avg
-                best_day = day
-        if best_day is not None:
-            clusters[best_day].append(idx)
+                eligible = [i for i in remaining if score(i) >= score(seed) - SCORE_SLACK] or remaining
+                pick = min(eligible, key=lambda i: sum(matrix[i][m] for m in members) / len(members))
+            remaining.remove(pick)
+            members.append(pick)
+        clusters[day] = members
 
     result: dict[int, list[Candidate]] = {}
     for day, indices in clusters.items():

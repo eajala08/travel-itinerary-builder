@@ -65,26 +65,21 @@ export default function ExportButton({ itinerary }: { itinerary: ItineraryRespon
   };
 
   return (
-    <div className="flex flex-wrap gap-1.5">
-      <button
-        onClick={handleExportPDF}
-        className="bg-red-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-red-700 transition font-medium text-xs whitespace-nowrap"
-      >
-        ⬇ PDF
+    <>
+      <button type="button" className="it-action-btn" onClick={handleExportPDF}>
+        PDF
       </button>
       <button
-        onClick={handleExportJSON}
-        className="bg-gray-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-gray-700 transition font-medium text-xs whitespace-nowrap"
-      >
-        ⬇ JSON
-      </button>
-      <button
+        type="button"
+        className="it-action-btn"
         onClick={handleExportCalendar}
-        className="bg-blue-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-blue-700 transition font-medium text-xs whitespace-nowrap"
-        title="Downloads a .ics file to import into Google Calendar, Apple Calendar, or Outlook"
+        title="Downloads a .ics file for Google Calendar, Apple Calendar, or Outlook"
       >
-        📅 Calendar
+        Calendar
       </button>
-    </div>
+      <button type="button" className="it-action-btn" onClick={handleExportJSON}>
+        JSON
+      </button>
+    </>
   );
 }
