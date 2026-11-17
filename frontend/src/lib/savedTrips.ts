@@ -17,13 +17,17 @@ export function getSavedTrips(): SavedTrip[] {
   }
 }
 
-export function saveTrip(itinerary: ItineraryResponse): SavedTrip {
+/**
+ * Saves the trip. Pass the id of a previously saved trip to update it in
+ * place (e.g. after AI edits) instead of creating a duplicate entry.
+ */
+export function saveTrip(itinerary: ItineraryResponse, existingId?: string | null): SavedTrip {
   const trip: SavedTrip = {
-    id: `${Date.now()}`,
+    id: existingId ?? `${Date.now()}`,
     savedAt: new Date().toISOString(),
     itinerary,
   };
-  const trips = [trip, ...getSavedTrips()];
+  const trips = [trip, ...getSavedTrips().filter((t) => t.id !== trip.id)];
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(trips));
   } catch {

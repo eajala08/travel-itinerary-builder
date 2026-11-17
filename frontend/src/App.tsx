@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useAppStore } from './lib/store';
 import { generateItinerary, editItinerary } from './lib/api';
-import { SIGNATURE_PICKS, VIBES } from './lib/constants';
+import { MAX_TRIP_DAYS, SIGNATURE_PICKS, VIBES } from './lib/constants';
+import { daysBetween } from './lib/format';
 import { deleteTrip, getSavedTrips, saveTrip, type SavedTrip } from './lib/savedTrips';
 import type { Preferences, TripInput } from './types/itinerary';
 import Sidebar, { type View } from './components/Sidebar';
@@ -18,8 +19,19 @@ const in3Days = new Date(today.getTime() + 3 * 24 * 60 * 60 * 1000);
 const toISODate = (d: Date) => d.toISOString().split('T')[0];
 
 export default function App() {
-  const { itinerary, loading, editingLoading, error, setItinerary, setLoading, setEditingLoading, setError } =
-    useAppStore();
+  const {
+    itinerary,
+    history,
+    loading,
+    editingLoading,
+    error,
+    setItinerary,
+    applyEdit,
+    undo,
+    setLoading,
+    setEditingLoading,
+    setError,
+  } = useAppStore();
 
   const [destination, setDestination] = useState('');
   const [startDate, setStartDate] = useState(toISODate(today));
@@ -34,6 +46,8 @@ export default function App() {
   const [view, setView] = useState<View>('builder');
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>(() => getSavedTrips());
   const [justSaved, setJustSaved] = useState(false);
+  // Id of the saved entry the current trip came from, so "Save" updates it instead of duplicating.
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   const showToast = (message: string, isError = false) => {
     setToast({ message, error: isError });
@@ -43,7 +57,8 @@ export default function App() {
   const togglePref = (key: string) => {
     setSelectedPrefs((prev) => {
       const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -96,6 +111,10 @@ export default function App() {
       showToast('End date must be after the start date', true);
       return;
     }
+    if (daysBetween(startDate, endDate) > MAX_TRIP_DAYS) {
+      showToast(`Trips can be up to ${MAX_TRIP_DAYS} days`, true);
+      return;
+    }
 
     const input: TripInput = {
       destination: destination.trim(),
@@ -113,6 +132,7 @@ export default function App() {
     try {
       const result = await generateItinerary(input);
       setItinerary(result);
+      setSavedId(null);
       showToast('Your trip is ready ✨');
       setView('itinerary');
     } catch (err) {
@@ -130,8 +150,8 @@ export default function App() {
     setEditingLoading(true);
     try {
       const updated = await editItinerary(itinerary, instruction, targetDay ?? null);
-      setItinerary(updated);
-      showToast('Trip updated');
+      applyEdit(updated);
+      showToast(targetDay ? `Day ${targetDay} updated` : 'Trip updated');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update itinerary.';
       setError(message);
@@ -143,15 +163,17 @@ export default function App() {
 
   const handleSave = () => {
     if (!itinerary) return;
-    saveTrip(itinerary);
+    const saved = saveTrip(itinerary, savedId);
+    setSavedId(saved.id);
     setSavedTrips(getSavedTrips());
     setJustSaved(true);
-    showToast('Trip saved');
+    showToast(savedId ? 'Saved trip updated' : 'Trip saved');
     setTimeout(() => setJustSaved(false), 2000);
   };
 
   const handleLoadSavedTrip = (trip: SavedTrip) => {
     setItinerary(trip.itinerary);
+    setSavedId(trip.id);
     setDestination(trip.itinerary.destination);
     setStartDate(trip.itinerary.dates[0]);
     setEndDate(trip.itinerary.dates[trip.itinerary.dates.length - 1]);
@@ -162,6 +184,7 @@ export default function App() {
 
   const handleDeleteSavedTrip = (id: string) => {
     deleteTrip(id);
+    if (id === savedId) setSavedId(null);
     setSavedTrips(getSavedTrips());
   };
 
@@ -171,11 +194,17 @@ export default function App() {
 
       {view === 'itinerary' ? (
         <ItineraryTab
+          key={itinerary ? `${itinerary.destination}|${itinerary.dates[0]}` : 'empty'}
           itinerary={itinerary}
           loading={loading}
           error={error}
           editingLoading={editingLoading}
           onEdit={handleEdit}
+          canUndo={history.length > 0}
+          onUndo={() => {
+            undo();
+            showToast('Reverted last change');
+          }}
           onSave={handleSave}
           justSaved={justSaved}
           onBack={() => setView('builder')}

@@ -54,7 +54,7 @@ def _build_query(lat: float, lng: float, radius_m: int, categories: list[str]) -
             tag_filters.extend(CATEGORY_TAGS[category])
 
     clauses = "\n".join(
-        f'  node["{key}"="{value}"](around:{radius_m},{lat},{lng});'
+        f'  nwr["{key}"="{value}"](around:{radius_m},{lat},{lng});'
         for key, value, _ in tag_filters
     )
     return f"""
@@ -62,7 +62,7 @@ def _build_query(lat: float, lng: float, radius_m: int, categories: list[str]) -
 (
 {clauses}
 );
-out center 60;
+out center 120;
 """
 
 

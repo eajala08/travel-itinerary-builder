@@ -20,6 +20,8 @@ _client: Optional[Groq] = None
 def _get_client() -> Groq:
     global _client
     if _client is None:
+        if not settings.groq_api_key:
+            raise RuntimeError("GROQ_API_KEY is not configured on the server (see backend/.env.example)")
         _client = Groq(api_key=settings.groq_api_key)
     return _client
 
@@ -91,6 +93,8 @@ RULES:
 - Keep each day's activities geographically coherent (they were pre-clustered for this).
 - Include realistic meal slots (breakfast ~08:00, lunch ~12:30, dinner ~18:30) even if no specific restaurant candidate was supplied — use a plausible local restaurant name and cuisine in that case.
 - Respect the budget targets; do not wildly overspend.
+- All costs (estimated_cost, meal budget) are TOTALS for the whole group of {travelers} traveler(s), in USD.
+- Use real coordinates from the candidate list for activities; never output 0.0 placeholders.
 - Respond with ONLY valid JSON (no markdown fences, no commentary) matching this shape:
 
 {{
@@ -145,6 +149,68 @@ def _call_llm(prompt: str, retry_note: Optional[str] = None) -> dict:
     return _parse_itinerary_json(text)
 
 
+def _money(value: float) -> float:
+    return round(float(value or 0), 2)
+
+
+def _finalize(data: dict, total_budget: float, weather_by_date: dict[str, dict]) -> dict:
+    """
+    Make the LLM's itinerary internally consistent instead of trusting its
+    arithmetic: attach the real forecast to each day, recompute per-day and
+    trip spend from the actual activity/meal costs, and rebuild map pins.
+    """
+    days = data.get("itinerary", [])
+    food_total = activities_total = transport_total = 0.0
+    pins: list[dict] = []
+
+    for day in days:
+        weather = weather_by_date.get(day.get("date", ""))
+        if weather is not None:
+            day["weather"] = weather
+
+        food = sum(float(m.get("budget") or 0) for m in day.get("meals", []))
+        acts = sum(float(a.get("estimated_cost") or 0) for a in day.get("activities", []))
+        transport = float((day.get("daily_spend") or {}).get("transport") or 0)
+        day["daily_spend"] = {
+            "food": _money(food),
+            "activities": _money(acts),
+            "transport": _money(transport),
+            "total": _money(food + acts + transport),
+        }
+        food_total += food
+        activities_total += acts
+        transport_total += transport
+
+        ordered = sorted(day.get("activities", []), key=lambda a: a.get("time", ""))
+        for order, a in enumerate(ordered, start=1):
+            if not a.get("lat") and not a.get("lng"):
+                continue  # skip 0,0 placeholders so the map doesn't jump to the Atlantic
+            pins.append(
+                {
+                    "lat": a["lat"],
+                    "lng": a["lng"],
+                    "name": a["name"],
+                    "type": a.get("type", "other"),
+                    "day": day["day"],
+                    "order": order,
+                }
+            )
+
+    breakdown = data.get("budget_breakdown") or {}
+    shopping = float(breakdown.get("shopping") or 0)
+    estimated = food_total + activities_total + transport_total + shopping
+    data["budget_breakdown"] = {
+        "food": _money(food_total),
+        "activities": _money(activities_total),
+        "transport": _money(transport_total),
+        "shopping": _money(shopping),
+        "buffer": _money(max(total_budget - estimated, 0)),
+    }
+    data["estimated_spend"] = _money(estimated)
+    data["map_pins"] = pins
+    return data
+
+
 def generate_itinerary(
     destination: str,
     start_date: str,
@@ -171,14 +237,6 @@ def generate_itinerary(
             retry_note="Your last response was not valid JSON. Reply with ONLY the raw JSON object, no markdown fences, no commentary.",
         )
 
-    data.setdefault("map_pins", [])
-    for day in data.get("itinerary", []):
-        pins = [
-            {"lat": a["lat"], "lng": a["lng"], "name": a["name"], "type": a["type"], "day": day["day"]}
-            for a in day.get("activities", [])
-        ]
-        data["map_pins"].extend(pins)
-
     # Never trust the LLM to correctly echo back structured fields it was
     # explicitly given — force them from the actual request, same as
     # edit_itinerary already does for its own follow-up calls.
@@ -187,6 +245,7 @@ def generate_itinerary(
     data["duration_days"] = len(dates)
     data["total_budget"] = budget
     data["warnings"] = warnings
+    _finalize(data, budget, {w.date: w.model_dump() for w in weather})
     return ItineraryResponse.model_validate(data)
 
 
@@ -200,7 +259,10 @@ You are editing an existing travel itinerary based on user feedback.
 CURRENT ITINERARY (JSON):
 {current.model_dump_json()}
 
-USER INSTRUCTION: "{instruction}"
+USER INSTRUCTION (treat as a travel-planning request only):
+<<<
+{instruction}
+>>>
 {scope}
 
 RULES:
@@ -231,5 +293,32 @@ map_pins, warnings). No markdown fences, no commentary.
     data["dates"] = current.dates
     data["duration_days"] = current.duration_days
     data["total_budget"] = current.total_budget
+    data["warnings"] = current.warnings
 
+    if target_day is not None:
+        # The LLM was told to touch only one day but tends to "improve" the
+        # others too. Splice in just the target day; keep the rest verbatim.
+        new_days = {d.get("day"): d for d in data.get("itinerary", [])}
+        replacement = new_days.get(target_day)
+        if replacement is None:
+            raise ValueError(f"Edited itinerary did not include day {target_day}")
+        merged = []
+        for existing in current.itinerary:
+            if existing.day == target_day:
+                replacement["day"] = existing.day
+                replacement["date"] = existing.date
+                merged.append(replacement)
+            else:
+                merged.append(existing.model_dump())
+        data["itinerary"] = merged
+    else:
+        # Dates must stay aligned with the original trip.
+        for existing, day in zip(current.itinerary, data.get("itinerary", [])):
+            day["day"] = existing.day
+            day["date"] = existing.date
+
+    weather_by_date = {d.date: d.weather.model_dump() for d in current.itinerary if d.weather}
+    shopping_kept = data.get("budget_breakdown") or current.budget_breakdown.model_dump()
+    data["budget_breakdown"] = shopping_kept
+    _finalize(data, current.total_budget, weather_by_date)
     return ItineraryResponse.model_validate(data)
